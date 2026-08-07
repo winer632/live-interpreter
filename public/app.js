@@ -24,6 +24,8 @@ const PAIRS = {
   zhja: { a: 'zh', b: 'ja', left: '中文', right: '日本語', name: '中日' },
   zhde: { a: 'zh', b: 'de', left: '中文', right: 'Deutsch', name: '中德' },
   zhfr: { a: 'zh', b: 'fr', left: '中文', right: 'Français', name: '中法' },
+  zhes: { a: 'zh', b: 'es', left: '中文', right: 'Español', name: '中西' },
+  zhpt: { a: 'zh', b: 'pt', left: '中文', right: 'Português', name: '中葡' },
   // 韩泰不在火山 s2s 的 8 语种里，只能走 s2t，因此没有译音
   zhko: { a: 'zh', b: 'ko', left: '中文', right: '한국어', name: '中韩', noAudio: true },
   zhth: { a: 'zh', b: 'th', left: '中文', right: 'ไทย', name: '中泰', noAudio: true },

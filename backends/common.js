@@ -33,7 +33,7 @@ const SCRIPTS = [
 const LANG_SCRIPT = {
   zh: 'han', yue: 'han',
   ja: 'kana', ko: 'hangul', th: 'thai',
-  en: 'latin', de: 'latin', fr: 'latin',
+  en: 'latin', de: 'latin', fr: 'latin', es: 'latin', pt: 'latin',
 };
 
 export function detectScript(text) {
@@ -73,6 +73,8 @@ export const PAIRS = {
   zhja: { id: 'zhja', a: 'zh', b: 'ja', label: '中日', left: '中文', right: '日本語' },
   zhde: { id: 'zhde', a: 'zh', b: 'de', label: '中德', left: '中文', right: 'Deutsch' },
   zhfr: { id: 'zhfr', a: 'zh', b: 'fr', label: '中法', left: '中文', right: 'Français' },
+  zhes: { id: 'zhes', a: 'zh', b: 'es', label: '中西', left: '中文', right: 'Español' },
+  zhpt: { id: 'zhpt', a: 'zh', b: 'pt', label: '中葡', left: '中文', right: 'Português' },
   // 韩泰不在 s2s 的 8 语种里，实测 zh2ko-s2s / zh2th-s2s 模型不存在，只能走 s2t
   zhko: { id: 'zhko', a: 'zh', b: 'ko', label: '中韩', left: '中文', right: '한국어', noAudio: true },
   zhth: { id: 'zhth', a: 'zh', b: 'th', label: '中泰', left: '中文', right: 'ไทย', noAudio: true },

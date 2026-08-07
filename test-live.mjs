@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const LANG = ['en', 'ja', 'yue', 'de', 'fr', 'ko', 'th'].includes(process.argv[2]) ? process.argv[2] : 'zh';
+const LANG = ['en', 'ja', 'yue', 'de', 'fr', 'es', 'pt', 'ko', 'th'].includes(process.argv[2]) ? process.argv[2] : 'zh';
 const CASES = {
   zh: { voice: 'Tingting', text: '王先生您好，非常感谢您今天专程过来。我们先介绍一下公司的基本情况，然后再谈合作细节。' },
   en: { voice: 'Samantha', text: 'Thank you for having me. Could you walk me through the pricing model and the enterprise deployment options first?' },
@@ -24,12 +24,14 @@ const CASES = {
   yue: { voice: 'Sinji', text: '你好，好高興見到你。我哋今日嚟傾下合作嘅細節啦。' },
   de: { voice: 'Anna', text: 'Guten Tag, schön Sie kennenzulernen. Sprechen wir über die Details der Zusammenarbeit.' },
   fr: { voice: 'Thomas', text: 'Bonjour, ravi de vous rencontrer. Parlons des details de la cooperation.' },
+  es: { voice: 'Paulina', text: 'Hola, encantado de conocerle. Hablemos de los detalles de la cooperación.' },
+  pt: { voice: 'Luciana', text: 'Olá, prazer em conhecê-lo. Vamos falar dos detalhes da cooperação.' },
   ko: { voice: 'Yuna', text: '안녕하세요, 만나서 반갑습니다. 협력 세부 사항에 대해 이야기합시다.' },
   th: { voice: 'Kanya', text: 'สวัสดีค่ะ ยินดีที่ได้รู้จัก มาคุยรายละเอียดความร่วมมือกันค่ะ' },
 };
 // 外语决定语言对；中文可以配任何一对，用 PAIR 环境变量指定
 const PAIR = process.env.PAIR
-  || ({ ja: 'zhja', de: 'zhde', fr: 'zhfr', ko: 'zhko', th: 'zhth', yue: 'yuezh' }[LANG] || 'zhen');
+  || ({ ja: 'zhja', de: 'zhde', fr: 'zhfr', es: 'zhes', pt: 'zhpt', ko: 'zhko', th: 'zhth', yue: 'yuezh' }[LANG] || 'zhen');
 const voice = CASES[LANG].voice;
 // 允许覆盖文本：node test-live.mjs zh "这是我们 SensePedia 的产品经理"
 const text = process.argv[3] || CASES[LANG].text;
