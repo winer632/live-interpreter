@@ -20,6 +20,7 @@ import { OpenAIBackend, testOpenAI } from './backends/openai.js';
 import { VolcengineBackend, testVolcengine } from './backends/volcengine.js';
 import { MockBackend } from './backends/mock.js';
 import * as transcript from './transcript.js';
+import { PAIRS } from './backends/common.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -298,7 +299,7 @@ server.on('upgrade', (req, socket, head) => {
   if (pathname !== '/ws') { socket.destroy(); return; }
   // 语言对在建连时定死：中日要开两条上游会话，中英只开一条，切换必须重连
   const requested = searchParams.get('pair');
-  const pair = ['zhja', 'yuezh'].includes(requested) ? requested : 'zhen';
+  const pair = PAIRS[requested] ? requested : 'zhen';
   wss.handleUpgrade(req, socket, head, (client) => session(client, pair));
 });
 

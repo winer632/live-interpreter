@@ -22,6 +22,11 @@ const OUTPUT_RATE = 24000;
 const PAIRS = {
   zhen: { a: 'zh', b: 'en', left: '中文', right: 'English', name: '中英' },
   zhja: { a: 'zh', b: 'ja', left: '中文', right: '日本語', name: '中日' },
+  zhde: { a: 'zh', b: 'de', left: '中文', right: 'Deutsch', name: '中德' },
+  zhfr: { a: 'zh', b: 'fr', left: '中文', right: 'Français', name: '中法' },
+  // 韩泰不在火山 s2s 的 8 语种里，只能走 s2t，因此没有译音
+  zhko: { a: 'zh', b: 'ko', left: '中文', right: '한국어', name: '中韩', noAudio: true },
+  zhth: { a: 'zh', b: 'th', left: '中文', right: 'ไทย', name: '中泰', noAudio: true },
   yuezh: { a: 'yue', b: 'zh', left: '粤语', right: '普通话', name: '粤→普', oneWay: true, noAudio: true },
 };
 const dirLabel = (p, forward) =>
@@ -50,7 +55,7 @@ const el = {
   status: $('#status'),
   startBtn: $('#startBtn'),
   backendBadge: $('#backendBadge'),
-  pairBtns: document.querySelectorAll('[data-pair]'),
+  pairSelect: $('#pairSelect'),
   headLeft: $('#headLeft'),
   headRight: $('#headRight'),
   dirBadge: $('#dirBadge'),
@@ -669,25 +674,24 @@ el.volumeInput.oninput = () => {
 
 el.startBtn.onclick = () => (state.running ? stop() : start());
 
-el.pairBtns.forEach((b) => {
-  b.onclick = () => {
-    const next = b.dataset.pair;
-    if (next === state.pair) return;
-    state.pair = next;
-    el.pairBtns.forEach((x) => x.classList.toggle('active', x === b));
-    el.headLeft.textContent = PAIRS[next].left;
-    el.headRight.textContent = PAIRS[next].right;
-    setDirection(null);
-    // 中日要开两条上游会话、中英只开一条，语言对是建连参数，必须重连
-    if (state.running) {
-      stop();
-      setTimeout(start, 200);
-      toast(`已切换到${PAIRS[next].name}${PAIRS[next].noAudio ? '（仅字幕，无译音）' : ''}，正在重连…`);
-    } else {
-      toast(`已切换到${PAIRS[next].name}${PAIRS[next].noAudio ? '（仅字幕，无译音）' : ''}`);
-    }
-  };
-});
+el.pairSelect.onchange = () => {
+  const next = el.pairSelect.value;
+  if (next === state.pair) return;
+  state.pair = next;
+  el.headLeft.textContent = PAIRS[next].left;
+  el.headRight.textContent = PAIRS[next].right;
+  setDirection(null);
+
+  const note = PAIRS[next].noAudio ? '（仅字幕，无译音）' : '';
+  // 不同语言对的上游会话数和模式（s2s / s2t）都不一样，语言对是建连参数，必须重连
+  if (state.running) {
+    stop();
+    setTimeout(start, 200);
+    toast(`已切换到${PAIRS[next].name}${note}，正在重连…`);
+  } else {
+    toast(`已切换到${PAIRS[next].name}${note}`);
+  }
+};
 
 el.clearBtn.onclick = () => {
   // 只清屏，归档在服务端不受影响

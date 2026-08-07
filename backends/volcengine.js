@@ -78,21 +78,31 @@ const E = {
 
 /** 每个语言对需要开哪些上游会话 */
 function planSessions(pair) {
-  if (pair.id === 'zhja') {
-    return [
-      { src: 'zh', dst: 'ja', dir: 'zh2ja', routes: false, mode: 's2s' },
-      // 这条的原文转写是判方向的唯一依据：有假名=在说日语
-      { src: 'ja', dst: 'zh', dir: 'ja2zh', routes: true, mode: 's2s' },
-    ];
+  // 中英是唯一有反转值的：一条会话包办双向，方向由它自己的原文转写判定
+  if (pair.id === 'zhen') {
+    return [{ src: 'zhen', dst: 'zhen', dir: null, routes: true, mode: 's2s' }];
   }
+
   if (pair.id === 'yuezh') {
     // 单向、且只能出字幕：实测 s2s 的 volc_tob-yue-CN2zh-s2s 模型不存在，
     // 只有 s2t 可用；反向 zh→yue-CN 两种模式都不存在，做不了。
     // 方向固定，不需要判别（普通话和粤语都是汉字，本来也判不了）。
     return [{ src: 'yue-CN', dst: 'zh', dir: 'yue2zh', routes: false, mode: 's2t' }];
   }
-  // 中英：一条会话包办双向，方向由它自己的原文转写判定
-  return [{ src: 'zhen', dst: 'zhen', dir: null, routes: true, mode: 's2s' }];
+
+  // 其余都是"中文 ⇄ X"：没有对应的反转值，只能开两条会话，同一路音频喂给两条，
+  // 再靠 DirectionRouter 放行其一。
+  //
+  // routes 标在 X→zh 那条上：实测各语种的 ASR 都不强制按声明的源语种识别，
+  // 喂中文时这条会如实吐出纯汉字，喂外语时吐该语种的文字，判据非常干净。
+  //
+  // 韩泰不在 s2s 的 8 语种里（zh/en/ja/de/fr/es/pt/id），只能走 s2t，因此没有译音。
+  const x = pair.b;
+  const mode = pair.noAudio ? 's2t' : 's2s';
+  return [
+    { src: 'zh', dst: x, dir: `zh2${x}`, routes: false, mode },
+    { src: x, dst: 'zh', dir: `${x}2zh`, routes: true, mode },
+  ];
 }
 
 // ------------------------------------------------------------------ 后端
@@ -104,7 +114,7 @@ export class VolcengineBackend {
    * @param {string} o.resourceId    固定 volc.service_type.10053
    * @param {string} [o.appKey]      旧版控制台 App Id
    * @param {string} [o.accessKey]   旧版控制台 Access Token
-   * @param {string} [o.pair]        zhen | zhja
+   * @param {string} [o.pair]        PAIRS 里的语言对 id
    * @param {object} [o.options]     terms / speakerId / speechRate
    * @param {Function} o.emit        向浏览器发送归一化事件
    */

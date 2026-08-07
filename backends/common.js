@@ -13,25 +13,52 @@
  *   { t: 'closed', reason }
  */
 
-const KANA = /[\u3040-\u30ff]/;               // 平假名 + 片假名，日语的判别特征
-const HAN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;  // 汉字
-const LATIN = /[A-Za-z]/;
+/**
+ * 按**文字系统**判别，而不是按语种 —— 语种没法从字面直接看出来（德语和法语都是
+ * 拉丁字母），但"这段文字用的是哪套书写系统"是确定的。再结合当前语言对只有两种
+ * 可能语种，就能唯一定位。
+ *
+ * 顺序有讲究：谚文/泰文/假名要排在汉字前面。韩语可能夹汉字、日语必然夹汉字，
+ * 先匹配汉字的话会把它们都误判成中文。
+ */
+const SCRIPTS = [
+  ['hangul', /[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]/],
+  ['thai', /[\u0e00-\u0e7f]/],
+  ['kana', /[\u3040-\u30ff]/],
+  ['han', /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/],
+  ['latin', /[A-Za-z]/],
+];
+
+/** 每种语言用什么文字系统写 */
+const LANG_SCRIPT = {
+  zh: 'han', yue: 'han',
+  ja: 'kana', ko: 'hangul', th: 'thai',
+  en: 'latin', de: 'latin', fr: 'latin',
+};
+
+export function detectScript(text) {
+  for (const [name, re] of SCRIPTS) if (re.test(text)) return name;
+  return null;
+}
 
 /**
- * 假名 → ja；汉字 → zh；拉丁字母 → en；纯标点数字 → null（信息不足，不改方向）
+ * 在给定语言对里判断这段文字属于哪一边。
  *
- * 判别顺序有讲究：
- *   · 假名优先。日语句子几乎必然含假名，中文永远不含，这是最干净的区分点；
- *     反过来只看汉字的话，日语里的汉字会被误判成中文。
- *   · 汉字优先于拉丁字母。中文里夹英文术语（"这是我们 SensePedia 的产品经理"）
- *     是常态，按字符比例算很容易把这种句子判成英文；而英文母语者的转写结果里
- *     不会冒出汉字，所以"有汉字即中文"是安全的。
+ * 只要两边用的文字系统不同就能唯一定位，中英/中日/中德/中法/中韩/中泰都满足。
+ * 中粤两边都是汉字，判不了 —— 但粤普本来就是单向固定方向，用不着判。
+ *
+ * 有汉字即判中文，不看比例：中文里夹外文术语（"这是我们 SensePedia 的产品经理"）
+ * 是常态，按字符比例算很容易把这种句子判成外语；反过来外语母语者的转写结果里
+ * 不会冒出汉字，所以这个方向是安全的。
  */
-export function detectLang(text) {
-  if (KANA.test(text)) return 'ja';
-  if (HAN.test(text)) return 'zh';
-  if (LATIN.test(text)) return 'en';
-  return null;
+export function detectPairLang(text, pair) {
+  const script = detectScript(text);
+  if (!script) return null;
+  const aHit = LANG_SCRIPT[pair.a] === script;
+  const bHit = LANG_SCRIPT[pair.b] === script;
+  if (aHit && !bHit) return pair.a;
+  if (bHit && !aHit) return pair.b;
+  return null;   // 两边同文字系统，无从区分
 }
 
 /**
@@ -44,6 +71,11 @@ export function detectLang(text) {
 export const PAIRS = {
   zhen: { id: 'zhen', a: 'zh', b: 'en', label: '中英', left: '中文', right: 'English' },
   zhja: { id: 'zhja', a: 'zh', b: 'ja', label: '中日', left: '中文', right: '日本語' },
+  zhde: { id: 'zhde', a: 'zh', b: 'de', label: '中德', left: '中文', right: 'Deutsch' },
+  zhfr: { id: 'zhfr', a: 'zh', b: 'fr', label: '中法', left: '中文', right: 'Français' },
+  // 韩泰不在 s2s 的 8 语种里，实测 zh2ko-s2s / zh2th-s2s 模型不存在，只能走 s2t
+  zhko: { id: 'zhko', a: 'zh', b: 'ko', label: '中韩', left: '中文', right: '한국어', noAudio: true },
+  zhth: { id: 'zhth', a: 'zh', b: 'th', label: '中泰', left: '中文', right: 'ไทย', noAudio: true },
   yuezh: {
     id: 'yuezh', a: 'yue', b: 'zh', label: '粤普', left: '粤语', right: '普通话',
     oneWay: true, noAudio: true,
@@ -106,9 +138,8 @@ export class DirectionRouter {
    */
   observe(text) {
     if (this.mode !== 'auto') return false;
-    const lang = detectLang(text);
-    // 只认本语言对里的两种语种，别的语种一律不改方向
-    if (lang !== this.pair.a && lang !== this.pair.b) return false;
+    const lang = detectPairLang(text, this.pair);
+    if (!lang) return false;
     const want = lang === this.pair.a ? this.forward : this.backward;
     if (want === this.dir) return false;
     if (this.frozen()) return false;
@@ -154,7 +185,7 @@ export class LineBuilder {
    *   必须在这一层做而不是在增量片段上做：术语可能被切在两个片段之间，
    *   逐片段替换会漏掉。
    */
-  constructor(emit, { idleMs = 1800, transform = null } = {}) {
+  constructor(emit, { idleMs = 5000, transform = null } = {}) {
     this.emit = emit;
     this.idleMs = idleMs;
     this.transform = transform;
@@ -204,8 +235,26 @@ export class LineBuilder {
     this.timer = setTimeout(() => this.finalizeAll(), this.idleMs);
   }
 
-  /** 显式句首（火山 650 / 653） */
+  /**
+   * 显式句首（火山 650 原文 / 653 译文）。
+   *
+   * 原文和译文原先各记各的号，靠"第 N 句原文对第 N 句译文"配对。但译文比原文
+   * 晚 2 秒以上到，中间一旦穿插了超时归档，两个号就会错开一格 —— 表现为
+   * 上一行只有原文没译文、下一行只有译文没原文。
+   *
+   * 改成按顺序认领：译文开始时，挂到最早那条"有原文、还没译文"的行上。
+   * 这样与时序无关，模型把一句原文拆成两句译文也不会串。
+   */
   begin(which, dir) {
+    if (which === 'dst') {
+      for (const [id, line] of this.lines) {
+        if (line.src && !line.dst && !line.dstDone) {
+          this.seq.dst = id;
+          this._line('dst', dir);
+          return;
+        }
+      }
+    }
     this.seq[which] += 1;
     this._line(which, dir);
   }

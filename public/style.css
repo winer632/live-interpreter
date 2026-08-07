@@ -118,9 +118,19 @@ button.small { padding: 6px 12px; font-size: 13px; }
 
 .tools { display: flex; align-items: center; gap: 8px; }
 
-.modes { display: flex; background: var(--panel-2); border-radius: 9px; padding: 2px; gap: 2px; }
-.modes button { border: none; background: transparent; padding: 6px 12px; font-size: 13px; border-radius: 7px; }
-.modes button.active { background: var(--accent); color: #fff; font-weight: 600; }
+.pair-select {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  width: auto;
+}
+.pair-select option { background: var(--panel); color: var(--fg); font-weight: 400; }
 
 #muteBtn.active { background: var(--danger); border-color: var(--danger); color: #fff; }
 
