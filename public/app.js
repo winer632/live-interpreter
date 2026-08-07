@@ -27,9 +27,16 @@ const PAIRS = {
 const dirLabel = (p, forward) =>
   forward ? `${p.left} → ${p.right}` : `${p.right} → ${p.left}`;
 
+/** DOM 里最多保留的行数。每行约 5 个节点，2000 行浏览器毫无压力，
+ *  约合 3 小时连续对话；再早的内容归档在服务端，点「导出」能拿到全部。 */
+const MAX_ROWS = 2000;
+
 const state = {
   running: false,
   pair: 'zhen',
+  epoch: 0,          // 每次建连 +1；历史行用 'h'，避免与新会话的行号撞车
+  stick: true,       // 是否贴在底部自动滚动
+  trimmed: false,
   backend: null,
   inputRate: 24000,
   echoGuard: 'aec',      // aec | duck | mute
@@ -70,6 +77,7 @@ const el = {
   fullscreenBtn: $('#fullscreenBtn'),
   muteBtn: $('#muteBtn'),
   toast: $('#toast'),
+  exportBtn: $('#exportBtn'),
   usageBadge: $('#usageBadge'),
   lagBadge: $('#lagBadge'),
   termList: $('#termList'),
@@ -345,9 +353,10 @@ function drawMeter(peak) {
 
 // ------------------------------------------------------------ 字幕渲染
 
-function renderLine(data) {
+function renderLine(data, epoch = state.epoch) {
   el.emptyHint.hidden = true;
-  let entry = state.lines.get(data.id);
+  const key = `${epoch}:${data.id}`;
+  let entry = state.lines.get(key);
 
   if (!entry) {
     const row = document.createElement('div');
@@ -358,12 +367,16 @@ function renderLine(data) {
       <div class="cell en"><span class="text"></span></div>`;
     el.transcript.appendChild(row);
     entry = { node: row };
-    state.lines.set(data.id, entry);
-    // 只保留最近 300 行，长会议不至于卡顿
-    if (state.lines.size > 300) {
-      const oldest = Math.min(...state.lines.keys());
-      state.lines.get(oldest)?.node.remove();
-      state.lines.delete(oldest);
+    state.lines.set(key, entry);
+    // Map 保序，超出上限就从最老的开始摘。内容已归档在服务端，不会真丢
+    if (state.lines.size > MAX_ROWS) {
+      const oldestKey = state.lines.keys().next().value;
+      state.lines.get(oldestKey)?.node.remove();
+      state.lines.delete(oldestKey);
+      if (!state.trimmed) {
+        state.trimmed = true;
+        toast('屏幕上只保留最近 2000 句，更早的内容已归档，点「导出」可取回全部');
+      }
     }
   }
 
@@ -379,9 +392,15 @@ function renderLine(data) {
   node.querySelector('.cell.zh .text').textContent = zh || '';
   node.querySelector('.cell.en .text').textContent = en || '';
 
-  const nearBottom = el.transcript.scrollHeight - el.transcript.scrollTop - el.transcript.clientHeight < 200;
-  if (nearBottom) el.transcript.scrollTop = el.transcript.scrollHeight;
+  // 贴底状态由 scroll 事件维护。原先每次增量更新都读 scrollHeight，
+  // 那是一次强制同步布局，行数一多就是每秒好几次 reflow
+  if (state.stick) el.transcript.scrollTop = Number.MAX_SAFE_INTEGER;
 }
+
+el.transcript.addEventListener('scroll', () => {
+  const { scrollHeight, scrollTop, clientHeight } = el.transcript;
+  state.stick = scrollHeight - scrollTop - clientHeight < 200;
+}, { passive: true });
 
 function setDirection(dir) {
   if (!dir) {
@@ -414,6 +433,7 @@ function connect() {
 
     switch (m.t) {
       case 'ready': {
+        state.epoch += 1;
         state.backend = m.backend;
         state.inputRate = m.inputRate;
         el.backendBadge.textContent = { volcengine: '火山 AST', openai: 'OpenAI', mock: '演示' }[m.backend] || m.backend;
@@ -662,7 +682,9 @@ el.pairBtns.forEach((b) => {
 });
 
 el.clearBtn.onclick = () => {
+  // 只清屏，归档在服务端不受影响
   state.lines.clear();
+  state.trimmed = false;
   el.transcript.innerHTML = '';
   el.transcript.appendChild(el.emptyHint);
   el.emptyHint.hidden = false;
@@ -697,6 +719,34 @@ document.addEventListener('keyup', (e) => {
 
 window.addEventListener('beforeunload', () => { if (state.running) stop(); });
 
+// ------------------------------------------------------------ 历史与导出
+
+/** 页面刷新后把当天已归档的字幕铺回来，接着往下记 */
+async function restoreHistory() {
+  const r = await fetch('/api/transcript?limit=500').then((x) => x.json()).catch(() => null);
+  if (!r?.lines?.length) return;
+
+  const stick = state.stick;
+  state.stick = true;
+  r.lines.forEach((l, i) => renderLine({ id: i, dir: l.dir, src: l.src, dst: l.dst, final: true }, 'h'));
+
+  const sep = document.createElement('div');
+  sep.className = 'history-sep';
+  sep.textContent = `以上为 ${r.date} 已归档的 ${r.lines.length} 句`;
+  el.transcript.appendChild(sep);
+
+  state.stick = stick;
+  el.transcript.scrollTop = Number.MAX_SAFE_INTEGER;
+}
+
+el.exportBtn.onclick = () => {
+  // 走 <a download> 而不是 fetch，让浏览器直接接管下载
+  const a = document.createElement('a');
+  a.href = '/api/export';
+  a.download = '';
+  a.click();
+};
+
 // ------------------------------------------------------------ 初始化
 
 (async function init() {
@@ -706,5 +756,6 @@ window.addEventListener('beforeunload', () => { if (state.running) stop(); });
 
   const st = await refreshStatus();
   if (!st) return;
+  if (!st.mock) await restoreHistory();
   if (!st.mock && !st.providers[st.backend]?.hasKey) openSettings();
 })();

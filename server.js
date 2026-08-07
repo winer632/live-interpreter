@@ -19,6 +19,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { OpenAIBackend, testOpenAI } from './backends/openai.js';
 import { VolcengineBackend, testVolcengine } from './backends/volcengine.js';
 import { MockBackend } from './backends/mock.js';
+import * as transcript from './transcript.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -229,6 +230,28 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // 页面刷新后恢复现场
+  if (pathname === '/api/transcript') {
+    const { searchParams } = new URL(req.url, 'http://localhost');
+    const date = searchParams.get('date') || transcript.today();
+    const limit = Math.min(2000, Number(searchParams.get('limit')) || 500);
+    sendJson(res, 200, { date, dates: transcript.listDates(), lines: transcript.readLines(date, limit) });
+    return;
+  }
+
+  // 导出当天记录为 Markdown
+  if (pathname === '/api/export') {
+    const { searchParams } = new URL(req.url, 'http://localhost');
+    const date = searchParams.get('date') || transcript.today();
+    const md = transcript.exportMarkdown(date);
+    res.writeHead(200, {
+      'content-type': 'text/markdown; charset=utf-8',
+      'content-disposition': `attachment; filename="transcript-${date}.md"`,
+    });
+    res.end(md);
+    return;
+  }
+
   if (pathname === '/api/test' && req.method === 'POST') {
     const { provider } = await readJsonBody(req).catch(() => ({}));
     const c = readConfig();
@@ -254,7 +277,15 @@ server.on('upgrade', (req, socket, head) => {
 
 async function session(client, pair = 'zhen') {
   const cfg = readConfig();
+  const backendName = MOCK ? 'mock' : cfg.backend;
+  // 演示模式不脏化归档
+  const archiveId = MOCK ? null : transcript.writeSessionStart({ backend: backendName, pair });
+
   const emit = (msg) => {
+    // 只归档已经定稿的整句，增量不写
+    if (archiveId && msg.t === 'line' && msg.final) {
+      try { transcript.writeLine(archiveId, msg); } catch (e) { console.warn('[transcript] 写入失败', e.message); }
+    }
     if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(msg));
   };
 
