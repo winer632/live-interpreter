@@ -56,7 +56,54 @@ const el = {
   toast: $('#toast'),
   usageBadge: $('#usageBadge'),
   lagBadge: $('#lagBadge'),
+  termList: $('#termList'),
+  termCount: $('#termCount'),
+  termStatus: $('#termStatus'),
+  addTerm: $('#addTerm'),
+  saveTerms: $('#saveTerms'),
 };
+
+// ------------------------------------------------------------ 术语库
+
+const MAX_TERMS = 10;
+
+function termRow(term = { text: '', wrong: [] }) {
+  const row = document.createElement('div');
+  row.className = 'term-row';
+  row.innerHTML = `
+    <input class="term-text" placeholder="正确写法，如 SensePedia" spellcheck="false" autocomplete="off">
+    <input class="term-wrong" placeholder="常见误识，逗号分隔（可留空）" spellcheck="false" autocomplete="off">
+    <button type="button" class="ghost small term-del" title="删除">✕</button>`;
+  row.querySelector('.term-text').value = term.text || '';
+  row.querySelector('.term-wrong').value = (term.wrong || []).join('、');
+  row.querySelector('.term-del').onclick = () => { row.remove(); updateTermCount(); };
+  return row;
+}
+
+function updateTermCount() {
+  const n = el.termList.querySelectorAll('.term-row').length;
+  el.termCount.textContent = `${n}/${MAX_TERMS}`;
+  el.addTerm.disabled = n >= MAX_TERMS;
+}
+
+function renderTerms(terms = []) {
+  el.termList.innerHTML = '';
+  const list = terms.length ? terms.slice(0, MAX_TERMS) : [{ text: '', wrong: [] }];
+  for (const t of list) el.termList.appendChild(termRow(t));
+  updateTermCount();
+}
+
+function collectTerms() {
+  return [...el.termList.querySelectorAll('.term-row')]
+    .map((row) => ({
+      text: row.querySelector('.term-text').value.trim(),
+      // 中英文逗号、顿号都能当分隔符
+      wrong: row.querySelector('.term-wrong').value
+        .split(/[,，、]/).map((s) => s.trim()).filter(Boolean),
+    }))
+    .filter((t) => t.text)
+    .slice(0, MAX_TERMS);
+}
 
 /**
  * 用量统计。
@@ -466,6 +513,8 @@ async function refreshStatus() {
   fill(el.volcStatus, st.providers.volcengine, '火山', '尚未配置。控制台 → 服务中心 → 开通同声传译后获取 API Key。');
   fill(el.openaiStatus, st.providers.openai, 'OpenAI', '尚未配置。platform.openai.com → API keys 创建。');
 
+  renderTerms(st.options?.terms || []);
+
   if (st.mock) {
     document.querySelector('.brand .sub').textContent = '演示模式 · 不消耗额度';
     document.querySelector('.brand .sub').style.color = 'var(--warn)';
@@ -533,6 +582,31 @@ el.backendSelect.onchange = async () => {
     body: JSON.stringify({ backend: el.backendSelect.value }),
   });
   toast(`已切换到 ${el.backendSelect.value === 'volcengine' ? '火山 AST' : 'OpenAI'}，下次开始传译时生效`, 'ok');
+};
+
+el.addTerm.onclick = () => {
+  if (el.termList.querySelectorAll('.term-row').length >= MAX_TERMS) return;
+  el.termList.appendChild(termRow());
+  updateTermCount();
+  el.termList.lastElementChild.querySelector('.term-text').focus();
+};
+
+el.saveTerms.onclick = async () => {
+  const terms = collectTerms();
+  const r = await fetch('/api/options', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ terms }),
+  }).then((x) => x.json()).catch(() => null);
+
+  if (r?.ok) {
+    el.termStatus.textContent = `已保存 ${terms.length} 条`;
+    el.termStatus.className = 'hint ok';
+    toast(state.running ? '术语库已保存，重新点「开始传译」后生效' : '术语库已保存', 'ok');
+  } else {
+    el.termStatus.textContent = '保存失败';
+    el.termStatus.className = 'hint warn';
+  }
 };
 
 el.echoSelect.onchange = () => { state.echoGuard = el.echoSelect.value; };

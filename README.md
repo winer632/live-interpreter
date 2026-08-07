@@ -89,6 +89,35 @@ npm start
 
 ---
 
+## 术语库
+
+产品名、公司名这类专有名词最容易被听错。实测 `SensePedia` 会被识别成
+`SensePDU` 或 `SenseTimeedia`（模型往已知的 SenseTime 上靠）。
+
+设置面板里可以填最多 **10 条**术语，每条两栏：
+
+| 正确写法 | 常见误识（可选） |
+|---|---|
+| `SensePedia` | `SensePDU、SenseTimeedia` |
+
+生效方式分两段，**这是实测出来的分工**：
+
+1. **`hot_words_list`（火山侧）** —— 引导模型把音听对。
+   实测 `SensePDU` → `Sense pedia`，音已经对了，**所以译音也念对了**。
+2. **本地文字纠正** —— 把写法规范化成 `SensePedia`。
+
+大小写和空格**自动收编**：填 `SensePedia` 就能同时改掉 `Sense pedia` /
+`SENSE PEDIA` / `sense Pedia`。只有发音层面的误识才需要手工填进第二栏。
+词边界有保护，`sensible pediatrics` 这类无关词不会被误伤。
+
+> 火山文档的参数表里有个 `correct_words` 替换词字段，但**官方 proto 的 `Corpus`
+> 消息里没有它**，protobuf 编码时会被静默丢弃 —— 实测无效。所以文字纠正是本地做的。
+
+> OpenAI 端点官方明确不支持术语库（"No custom prompting or glossaries"），
+> 切到 OpenAI 时只能纠正字幕文字，**改不了已经合成的语音**。
+
+---
+
 ## 三个已知特性，会谈前请知悉
 
 ### 1. 首句译音约 2 秒才出来

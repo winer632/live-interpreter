@@ -266,6 +266,23 @@ kbd {
 .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
 .row input[type=password] { flex: 1; }
 
+/* 术语库编辑表 */
+.terms { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.term-row { display: grid; grid-template-columns: 1fr 1.2fr auto; gap: 6px; align-items: center; }
+.term-row input {
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--fg);
+  min-width: 0;
+}
+.term-row .term-text { font-weight: 600; }
+.term-row .term-del { padding: 6px 9px; color: var(--fg-dim); border-color: transparent; }
+.term-row .term-del:hover { color: var(--danger); border-color: var(--line); }
+
 input[type=password], select {
   font: inherit;
   padding: 9px 11px;

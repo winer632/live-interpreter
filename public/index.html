@@ -81,6 +81,30 @@
   </section>
 
   <section>
+    <h3>术语库 <span id="termCount" class="pill">0/10</span></h3>
+    <p class="note" style="margin-top:0">
+      产品名、公司名这类专有名词容易被听错（实测 <code>SensePedia</code> 会被认成
+      <code>SensePDU</code>、<code>SenseTimeedia</code>）。填进来后：
+      <strong>热词</strong>让模型把音听对，<strong>译音也会跟着念对</strong>；
+      写法则由程序规范化。<br>
+      大小写和空格<strong>自动收编</strong>——填 <code>SensePedia</code> 就能同时改掉
+      <code>Sense pedia</code> / <code>SENSE PEDIA</code>。发音层面的误识才需要填进右栏。
+    </p>
+    <div id="termList" class="terms"></div>
+    <div class="row">
+      <button id="addTerm" type="button" class="ghost small">＋ 添加术语</button>
+      <button id="saveTerms" type="button" class="primary small">保存术语库</button>
+      <span id="termStatus" class="hint" style="margin:0"></span>
+    </div>
+    <p class="note">
+      改动在<strong>下次点「开始传译」</strong>时生效。
+      火山后端才有热词能力；OpenAI 端点官方明确不支持术语库
+      （"No custom prompting or glossaries"），切到 OpenAI 时只能纠正字幕文字，
+      <strong>改不了已经合成的语音</strong>。
+    </p>
+  </section>
+
+  <section>
     <h3>火山引擎 API Key</h3>
     <p id="volcStatus" class="hint">读取中…</p>
     <div class="row">

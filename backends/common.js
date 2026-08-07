@@ -16,7 +16,13 @@
 const CJK = /[㐀-䶿一-鿿豈-﫿぀-ヿ]/;
 const LATIN = /[A-Za-z]/;
 
-/** 中日文字 → zh；拉丁字母 → en；纯标点数字 → null（信息不足，不改方向） */
+/**
+ * 中日文字 → zh；拉丁字母 → en；纯标点数字 → null（信息不足，不改方向）
+ *
+ * 只要出现汉字就判中文，不看比例：英文母语者的转写结果里不会冒出汉字，
+ * 而中文里夹英文术语（"这是我们 SensePedia 的产品经理"）是常态。
+ * 反过来按比例算的话，这种句子很容易被判成英文。
+ */
 export function detectLang(text) {
   if (CJK.test(text)) return 'zh';
   if (LATIN.test(text)) return 'en';
@@ -64,7 +70,13 @@ export class DirectionRouter {
     return Date.now() - this.lastPlaying < FREEZE_TAIL_MS;
   }
 
-  /** 依据一段源语言文本更新方向；返回方向是否真的变了 */
+  /**
+   * 依据源语言文本更新方向；返回方向是否真的变了。
+   *
+   * 传进来的必须是**整句累计文本**，不能是单个增量片段。中文句子里嵌英文术语时
+   * （"这是我们 SensePedia 的产品经理"），单看 "SensePedia" 那个片段会判成英文，
+   * 把整句的方向带翻——这是实测中真实踩到的坑。
+   */
   observe(text) {
     if (this.mode !== 'auto') return false;
     const lang = detectLang(text);
@@ -108,9 +120,16 @@ export function mergeText(prev, next) {
  * OpenAI 没有句子边界，退化成"方向变化或静默超时即断句"。
  */
 export class LineBuilder {
-  constructor(emit, { idleMs = 1800 } = {}) {
+  /**
+   * @param {object} [o]
+   * @param {Function} [o.transform] 发给前端之前对整句文本做的加工（术语纠正）。
+   *   必须在这一层做而不是在增量片段上做：术语可能被切在两个片段之间，
+   *   逐片段替换会漏掉。
+   */
+  constructor(emit, { idleMs = 1800, transform = null } = {}) {
     this.emit = emit;
     this.idleMs = idleMs;
+    this.transform = transform;
     this.lines = new Map();
     this.finished = new Set();
     this.seq = { src: 0, dst: 0 };
@@ -132,12 +151,13 @@ export class LineBuilder {
 
   _flush(line) {
     const final = line.srcDone && line.dstDone;
+    const fix = this.transform;
     this.emit({
       t: 'line',
       id: line.id,
       dir: line.dir,
-      src: line.src,
-      dst: line.dst,
+      src: fix ? fix(line.src) : line.src,
+      dst: fix ? fix(line.dst) : line.dst,
       final,
     });
     if (final) {
@@ -206,6 +226,111 @@ export class LineBuilder {
     clearTimeout(this.timer);
     this.lines.clear();
   }
+}
+
+// ------------------------------------------------------------ 术语库
+
+/** 一次最多下发的术语条数 */
+export const MAX_TERMS = 10;
+
+/**
+ * 把界面上的术语表编译成火山的 corpus 参数。
+ *
+ * 只发两个字段：
+ *
+ *   hot_words_list  识别阶段  引导 ASR 听出这个词。实测有效：SensePedia 在无干预
+ *                             时被认成 SensePDU，加热词后变成 Sense pedia —— 音对了，
+ *                             所以 TTS 也念对了，只剩写法要修
+ *   glossary_list   翻译阶段  中文术语 → 英文术语的固定对照
+ *
+ * 文档参数表里还有个 correct_words 替换词，但官方 proto 的 Corpus 消息**没有这个
+ * 字段**，编码时会被静默丢弃（已实测确认无效）。写法层面的纠正因此改由
+ * applyCorrections 在本地做。
+ *
+ * 一行 { text: 'SensePedia', zh: '商汤百科' } 会展开成：
+ *   hot_words_list = ['SensePedia', '商汤百科']
+ *   glossary_list  = { '商汤百科': 'SensePedia' }
+ */
+export function buildCorpus(terms = []) {
+  const hot = [];
+  const glossary = {};
+
+  for (const t of terms.slice(0, MAX_TERMS)) {
+    const text = String(t?.text || '').trim();
+    if (!text) continue;
+    hot.push(text);
+
+    const zh = String(t?.zh || '').trim();
+    if (zh) {
+      hot.push(zh);
+      glossary[zh] = text;
+    }
+  }
+
+  const corpus = {};
+  if (hot.length) corpus.hot_words_list = [...new Set(hot)];
+  if (Object.keys(glossary).length) corpus.glossary_list = glossary;
+  return Object.keys(corpus).length ? corpus : null;
+}
+
+/**
+ * 字幕文本的术语纠正。
+ *
+ * 为什么需要它：火山文档的参数表里写了 `correct_words` 替换词，但官方 proto 的
+ * Corpus 消息**没有这个字段**，protobuf 编码时会被静默丢弃（已实测确认）。
+ * 所以文字层面的纠正只能自己做。
+ *
+ * 分工是清晰的：
+ *   · hot_words_list 让模型把音**听对**，译音因此也念得对
+ *   · 这里只把**写法**规范化，不碰音频
+ *
+ * 每条术语会自动派生一条"大小写 + 空格"模糊规则：填 `SensePedia` 就能同时收编
+ * `Sense pedia` / `sense Pedia` / `SENSE  PEDIA`。发音层面的误识（`SensePDU`、
+ * `SenseTimeedia` 这种）才需要手工补进 wrong 列表。
+ */
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** 把一个词变成"允许内部空白、忽略大小写"的正则 */
+function fuzzy(word) {
+  const parts = String(word)
+    .split(/(?=[A-Z])|[\s_-]+/)   // 驼峰、空格、下划线、连字符都当分隔
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!parts.length) return null;
+  const body = parts.map(escapeRegExp).join('\\s*');
+  // 前后加词边界，避免命中别的词的一部分
+  const lead = /^[\w]/.test(parts[0]) ? '\\b' : '';
+  const tail = /[\w]$/.test(parts[parts.length - 1]) ? '\\b' : '';
+  try { return new RegExp(lead + body + tail, 'gi'); } catch { return null; }
+}
+
+const patternCache = new WeakMap();
+
+function termPatterns(terms) {
+  if (patternCache.has(terms)) return patternCache.get(terms);
+  const rules = [];
+  for (const t of terms.slice(0, MAX_TERMS)) {
+    const right = String(t?.text || '').trim();
+    if (!right) continue;
+    for (const word of [right, ...(t?.wrong || [])]) {
+      const re = fuzzy(word);
+      if (re) rules.push([re, right]);
+    }
+  }
+  patternCache.set(terms, rules);
+  return rules;
+}
+
+export function applyCorrections(text, terms) {
+  if (!text || !terms?.length) return text;
+  let out = text;
+  for (const [re, right] of termPatterns(terms)) {
+    re.lastIndex = 0;
+    out = out.replace(re, right);
+  }
+  return out;
 }
 
 /** base64 PCM16 的时长（毫秒） */

@@ -18,7 +18,9 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import protobuf from 'protobufjs';
 import { WebSocket } from 'ws';
-import { DirectionRouter, LineBuilder, pcmDurationMs } from './common.js';
+import {
+  DirectionRouter, LineBuilder, pcmDurationMs, mergeText, buildCorpus, applyCorrections,
+} from './common.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROTO_DIR = path.join(__dirname, '..', 'protos');
@@ -82,7 +84,10 @@ export class VolcengineBackend {
     this.options = options;
     this.emit = emit;
     this.router = new DirectionRouter();
-    this.lines = new LineBuilder(emit);
+    // 火山负责把音听对（hot_words），写法由这一层统一规范
+    this.lines = new LineBuilder(emit, {
+      transform: (t) => applyCorrections(t, options.terms),
+    });
     this.ws = null;
     this.sessionId = null;
     this.running = false;
@@ -197,10 +202,12 @@ export class VolcengineBackend {
       request.tts_resource_id = o.ttsResourceId || 'seed-tts-2.0';
     }
     if (typeof o.speechRate === 'number') request.speech_rate = o.speechRate;
-    if (o.hotWords?.length || o.glossary) {
-      request.corpus = {};
-      if (o.hotWords?.length) request.corpus.hot_words_list = o.hotWords;
-      if (o.glossary) request.corpus.glossary_list = o.glossary;
+
+    // 术语库：一条术语同时喂给热词（识别）、替换词（后处理）、术语表（翻译）
+    const corpus = buildCorpus(o.terms);
+    if (corpus) {
+      request.corpus = corpus;
+      console.log('[volc] 术语库已下发:', JSON.stringify(corpus));
     }
 
     return {
@@ -280,16 +287,23 @@ export class VolcengineBackend {
 
       case E.SourceSubtitleStart:
         this.lines.begin('src');
+        this.srcAccum = '';
         break;
 
       case E.SourceSubtitleResponse:
       case E.SourceSubtitleEnd: {
         if (!text) break;
-        // 原文语种决定这一句的排版方向
-        if (this.router.observe(text)) this.emit({ t: 'dir', dir: this.router.dir });
-        const dir = this.router.mode === 'auto' ? this.router.dir : this.router.mode;
-        // 651 是增量片段，652 是整句全量
         const isEnd = r.event === E.SourceSubtitleEnd;
+
+        // 651 是增量片段，652 是整句全量
+        this.srcAccum = isEnd ? text : mergeText(this.srcAccum, text);
+
+        // 方向要按**整句累计文本**判，不能按单个片段判：
+        // "这是我们 SensePedia 的产品经理" 里的 "SensePedia" 片段不含汉字，
+        // 单看它会把整句方向判成英文
+        if (this.router.observe(this.srcAccum)) this.emit({ t: 'dir', dir: this.router.dir });
+
+        const dir = this.router.mode === 'auto' ? this.router.dir : this.router.mode;
         this.lines.update('src', dir, text, isEnd);
         if (isEnd) this.lines.end('src', dir);
         break;

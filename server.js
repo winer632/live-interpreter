@@ -274,7 +274,7 @@ async function session(client) {
         client.close();
         return;
       }
-      backend = new OpenAIBackend({ apiKey: cfg.openai.apiKey, emit });
+      backend = new OpenAIBackend({ apiKey: cfg.openai.apiKey, options: cfg.options, emit });
       backend.start(await agentFor('openai'));
     }
   } catch (err) {

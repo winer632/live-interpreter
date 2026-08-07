@@ -14,7 +14,7 @@
  */
 
 import { WebSocket } from 'ws';
-import { DirectionRouter, LineBuilder, pcmDurationMs } from './common.js';
+import { DirectionRouter, LineBuilder, pcmDurationMs, applyCorrections } from './common.js';
 
 export const INPUT_RATE = 24000;
 export const OUTPUT_RATE = 24000;
@@ -40,11 +40,15 @@ function sessionUpdate(targetLang) {
 }
 
 export class OpenAIBackend {
-  constructor({ apiKey, emit }) {
+  constructor({ apiKey, options = {}, emit }) {
     this.apiKey = apiKey;
     this.emit = emit;
     this.router = new DirectionRouter();
-    this.lines = new LineBuilder(emit);
+    // OpenAI 这个端点明确不支持术语库（官方文档："No custom prompting or
+    // glossaries"），所以只能在字幕文本上纠正 —— **改不了已经合成的语音**
+    this.lines = new LineBuilder(emit, {
+      transform: (t) => applyCorrections(t, options.terms),
+    });
     this.sessions = {};
     this.running = false;
   }

@@ -21,7 +21,9 @@ const CASES = {
   zh: { voice: 'Tingting', text: '王先生您好，非常感谢您今天专程过来。我们先介绍一下公司的基本情况，然后再谈合作细节。' },
   en: { voice: 'Samantha', text: 'Thank you for having me. Could you walk me through the pricing model and the enterprise deployment options first?' },
 };
-const { voice, text } = CASES[LANG];
+const voice = CASES[LANG].voice;
+// 允许覆盖文本：node test-live.mjs zh "这是我们 SensePedia 的产品经理"
+const text = process.argv[3] || CASES[LANG].text;
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'interp-'));
 const aiff = path.join(tmp, 'in.aiff');
