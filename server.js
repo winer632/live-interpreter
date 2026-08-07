@@ -247,7 +247,8 @@ server.on('upgrade', (req, socket, head) => {
   const { pathname, searchParams } = new URL(req.url, 'http://localhost');
   if (pathname !== '/ws') { socket.destroy(); return; }
   // 语言对在建连时定死：中日要开两条上游会话，中英只开一条，切换必须重连
-  const pair = searchParams.get('pair') === 'zhja' ? 'zhja' : 'zhen';
+  const requested = searchParams.get('pair');
+  const pair = ['zhja', 'yuezh'].includes(requested) ? requested : 'zhen';
   wss.handleUpgrade(req, socket, head, (client) => session(client, pair));
 });
 
@@ -276,8 +277,8 @@ async function session(client, pair = 'zhen') {
         client.close();
         return;
       }
-      if (pair === 'zhja') {
-        emit({ t: 'error', message: 'OpenAI 后端暂只支持中英互译，中日请切换到火山后端', fatal: true });
+      if (pair !== 'zhen') {
+        emit({ t: 'error', message: 'OpenAI 后端只支持中英互译，中日 / 粤普请切换到火山后端', fatal: true });
         client.close();
         return;
       }

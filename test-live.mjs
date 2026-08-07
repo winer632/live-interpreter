@@ -16,14 +16,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const LANG = ['en', 'ja'].includes(process.argv[2]) ? process.argv[2] : 'zh';
+const LANG = ['en', 'ja', 'yue'].includes(process.argv[2]) ? process.argv[2] : 'zh';
 const CASES = {
   zh: { voice: 'Tingting', text: '王先生您好，非常感谢您今天专程过来。我们先介绍一下公司的基本情况，然后再谈合作细节。' },
   en: { voice: 'Samantha', text: 'Thank you for having me. Could you walk me through the pricing model and the enterprise deployment options first?' },
   ja: { voice: 'Kyoko', text: 'こんにちは、お会いできて嬉しいです。協力の詳細についてお話ししましょう。' },
+  yue: { voice: 'Sinji', text: '你好，好高興見到你。我哋今日嚟傾下合作嘅細節啦。' },
 };
 // 日语必然走中日语言对；中文两种语言对都能测，用 PAIR 环境变量指定
-const PAIR = process.env.PAIR || (LANG === 'ja' ? 'zhja' : 'zhen');
+const PAIR = process.env.PAIR || (LANG === 'ja' ? 'zhja' : LANG === 'yue' ? 'yuezh' : 'zhen');
 const voice = CASES[LANG].voice;
 // 允许覆盖文本：node test-live.mjs zh "这是我们 SensePedia 的产品经理"
 const text = process.argv[3] || CASES[LANG].text;
@@ -141,7 +142,8 @@ function finish(code) {
   check(got.length > 0, `产出字幕 ${got.length} 句`);
   check(got.some((l) => l.src?.trim()), '有原文');
   check(got.some((l) => l.dst?.trim()), '有译文');
-  check(outAudio.length > 0, `收到译音 ${outAudio.length} 包`);
+  if (PAIR === 'yuezh') console.log(`ℹ️  粤普为 s2t，只有字幕无译音（收到 ${outAudio.length} 包）`);
+  else check(outAudio.length > 0, `收到译音 ${outAudio.length} 包`);
 
   if (outAudio.length) {
     const data = Buffer.concat(outAudio);

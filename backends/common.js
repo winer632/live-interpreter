@@ -34,10 +34,20 @@ export function detectLang(text) {
   return null;
 }
 
-/** 支持的语言对。中文固定在左栏，另一种语言在右栏。 */
+/**
+ * 支持的语言对。a 在左栏、b 在右栏。
+ *
+ * yuezh 是单向的：实测火山 s2s 里 yue-CN→zh 和 zh→yue-CN 的模型都不存在
+ * （报 volc_tob-yue-CN2zh-s2s not found），只有 s2t 的 yue-CN→zh 可用。
+ * 所以粤普只能出字幕、没有译音，而且做不了反向。
+ */
 export const PAIRS = {
-  zhen: { id: 'zhen', a: 'zh', b: 'en', label: '中英', right: 'English' },
-  zhja: { id: 'zhja', a: 'zh', b: 'ja', label: '中日', right: '日本語' },
+  zhen: { id: 'zhen', a: 'zh', b: 'en', label: '中英', left: '中文', right: 'English' },
+  zhja: { id: 'zhja', a: 'zh', b: 'ja', label: '中日', left: '中文', right: '日本語' },
+  yuezh: {
+    id: 'yuezh', a: 'yue', b: 'zh', label: '粤普', left: '粤语', right: '普通话',
+    oneWay: true, noAudio: true,
+  },
 };
 
 /** 译音播完之后继续冻结方向的时间，用来吃掉扬声器的尾音 */

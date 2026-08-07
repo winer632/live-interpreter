@@ -31,6 +31,7 @@
     <div class="modes" role="group" aria-label="语言对">
       <button data-pair="zhen" class="active" title="中文 ⇄ English，自动识别说话人语种">中英自动</button>
       <button data-pair="zhja" title="中文 ⇄ 日本語，自动识别说话人语种。需开两条上游会话，费用约为中英的两倍">中日自动</button>
+      <button data-pair="yuezh" title="粤语 → 普通话，单向。火山只提供 s2t，所以只有字幕、没有译音；反向（普通话→粤语）服务端无对应模型">粤→普</button>
     </div>
     <button id="muteBtn" class="ghost" title="点击静音，或按住空格键临时静音">🎤 麦克风</button>
     <button id="clearBtn" class="ghost" title="清空字幕">清空</button>
@@ -45,7 +46,7 @@
 
 <main class="board">
   <div class="col-head">
-    <div class="head zh">中文</div>
+    <div id="headLeft" class="head zh">中文</div>
     <div class="head-spacer"></div>
     <div id="headRight" class="head en">English</div>
   </div>

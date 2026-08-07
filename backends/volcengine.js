@@ -80,13 +80,19 @@ const E = {
 function planSessions(pair) {
   if (pair.id === 'zhja') {
     return [
-      { src: 'zh', dst: 'ja', dir: 'zh2ja', routes: false },
+      { src: 'zh', dst: 'ja', dir: 'zh2ja', routes: false, mode: 's2s' },
       // 这条的原文转写是判方向的唯一依据：有假名=在说日语
-      { src: 'ja', dst: 'zh', dir: 'ja2zh', routes: true },
+      { src: 'ja', dst: 'zh', dir: 'ja2zh', routes: true, mode: 's2s' },
     ];
   }
+  if (pair.id === 'yuezh') {
+    // 单向、且只能出字幕：实测 s2s 的 volc_tob-yue-CN2zh-s2s 模型不存在，
+    // 只有 s2t 可用；反向 zh→yue-CN 两种模式都不存在，做不了。
+    // 方向固定，不需要判别（普通话和粤语都是汉字，本来也判不了）。
+    return [{ src: 'yue-CN', dst: 'zh', dir: 'yue2zh', routes: false, mode: 's2t' }];
+  }
   // 中英：一条会话包办双向，方向由它自己的原文转写判定
-  return [{ src: 'zhen', dst: 'zhen', dir: null, routes: true }];
+  return [{ src: 'zhen', dst: 'zhen', dir: null, routes: true, mode: 's2s' }];
 }
 
 // ------------------------------------------------------------------ 后端
@@ -131,8 +137,8 @@ export class VolcengineBackend {
   start(agent) {
     this.running = true;
     this.agent = agent;
-    // 双会话时先给一个默认方向，否则开场谁都不放行
-    if (this.pair.id === 'zhja') this.router.dir = this.router.forward;
+    // 单向语言对方向定死；双会话时先给个默认方向，否则开场谁都不放行
+    if (this.pair.oneWay || this.pair.id === 'zhja') this.router.dir = this.router.forward;
 
     this.sessions = planSessions(this.pair).map((plan) => ({
       plan,
@@ -224,8 +230,9 @@ export class VolcengineBackend {
   _startSessionMessage(sess) {
     const o = this.options;
     const { src, dst } = sess.plan;
+    const mode = sess.plan.mode || 's2s';
     const request = {
-      mode: 's2s',
+      mode,
       source_language: src,
       target_language: dst,
       enable_source_language_detect: true,
@@ -244,17 +251,21 @@ export class VolcengineBackend {
     const corpus = buildCorpus(o.terms);
     if (corpus) request.corpus = corpus;
 
-    return {
+    const msg = {
       request_meta: { SessionID: sess.sessionId },
       event: E.StartSession,
       user: { uid: 'live-interpreter', did: 'mac-desktop', platform: 'web' },
       source_audio: { format: 'pcm', rate: INPUT_RATE, bits: 16, channel: 1 },
-      // 文档：pcm 在 24000Hz 下默认 32float、16000Hz 下默认 16bit。
-      // 这里显式声明 16bit，同时接收端还有 float32 自动识别兜底。
-      target_audio: { format: 'pcm', rate: OUTPUT_RATE, bits: 16, channel: 1 },
       request,
       denoise: true,
     };
+    // s2t 只出文本，不需要目标音频配置
+    if (mode === 's2s') {
+      // 文档：pcm 在 24000Hz 下默认 32float、16000Hz 下默认 16bit。
+      // 这里显式声明 16bit，同时接收端还有 float32 自动识别兜底。
+      msg.target_audio = { format: 'pcm', rate: OUTPUT_RATE, bits: 16, channel: 1 };
+    }
+    return msg;
   }
 
   /** @param {string} base64 16kHz PCM16 单声道 */
@@ -326,6 +337,7 @@ export class VolcengineBackend {
             t: 'ready',
             backend: 'volcengine',
             pair: this.pair.id,
+            noAudio: Boolean(this.pair.noAudio),
             inputRate: INPUT_RATE,
             logId: sess.logId,
           });

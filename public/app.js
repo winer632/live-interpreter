@@ -13,11 +13,19 @@
 
 const OUTPUT_RATE = 24000;
 
-/** 中文固定在左栏，右栏随语言对变化 */
+/**
+ * 语言对：a 在左栏、b 在右栏，方向标识形如 `${a}2${b}`。
+ *
+ * yuezh 是单向的 —— 实测火山 s2s 里粤语两个方向的模型都不存在，只有
+ * s2t 的 yue-CN→zh 可用，所以只有字幕、没有译音。
+ */
 const PAIRS = {
-  zhen: { right: 'English', fwd: 'zh2en', back: 'en2zh', fwdLabel: '中文 → English', backLabel: 'English → 中文' },
-  zhja: { right: '日本語', fwd: 'zh2ja', back: 'ja2zh', fwdLabel: '中文 → 日本語', backLabel: '日本語 → 中文' },
+  zhen: { a: 'zh', b: 'en', left: '中文', right: 'English', name: '中英' },
+  zhja: { a: 'zh', b: 'ja', left: '中文', right: '日本語', name: '中日' },
+  yuezh: { a: 'yue', b: 'zh', left: '粤语', right: '普通话', name: '粤→普', oneWay: true, noAudio: true },
 };
+const dirLabel = (p, forward) =>
+  forward ? `${p.left} → ${p.right}` : `${p.right} → ${p.left}`;
 
 const state = {
   running: false,
@@ -36,6 +44,7 @@ const el = {
   startBtn: $('#startBtn'),
   backendBadge: $('#backendBadge'),
   pairBtns: document.querySelectorAll('[data-pair]'),
+  headLeft: $('#headLeft'),
   headRight: $('#headRight'),
   dirBadge: $('#dirBadge'),
   meterFill: $('#meterFill'),
@@ -359,11 +368,12 @@ function renderLine(data) {
   }
 
   const { node } = entry;
-  const forward = String(data.dir || '').startsWith('zh2');   // 中译外
+  const p = PAIRS[state.pair];
+  const forward = data.dir === `${p.a}2${p.b}`;   // 左栏语言 → 右栏语言
   node.className = `turn ${forward ? 'zh2en' : 'en2zh'}${data.final ? '' : ' live'}`;
   node.querySelector('.arrow').textContent = forward ? '→' : '←';
 
-  // src 是源语言、dst 是目标语言；中文固定落左栏
+  // src 是源语言、dst 是目标语言，按方向落到左右两栏
   const zh = forward ? data.src : data.dst;
   const en = forward ? data.dst : data.src;
   node.querySelector('.cell.zh .text').textContent = zh || '';
@@ -380,9 +390,9 @@ function setDirection(dir) {
     return;
   }
   const p = PAIRS[state.pair];
-  const forward = dir === p.fwd;
-  el.dirBadge.textContent = forward ? p.fwdLabel : p.backLabel;
-  // 样式沿用中英那套：正向（中→外）用 zh2en，反向用 en2zh
+  const forward = dir === `${p.a}2${p.b}`;
+  el.dirBadge.textContent = dirLabel(p, forward);
+  // 样式沿用中英那套：正向用 zh2en 的配色，反向用 en2zh
   el.dirBadge.className = `dir-badge ${forward ? 'zh2en' : 'en2zh'}`;
 }
 
@@ -637,15 +647,16 @@ el.pairBtns.forEach((b) => {
     if (next === state.pair) return;
     state.pair = next;
     el.pairBtns.forEach((x) => x.classList.toggle('active', x === b));
+    el.headLeft.textContent = PAIRS[next].left;
     el.headRight.textContent = PAIRS[next].right;
     setDirection(null);
     // 中日要开两条上游会话、中英只开一条，语言对是建连参数，必须重连
     if (state.running) {
       stop();
       setTimeout(start, 200);
-      toast(`已切换到${next === 'zhja' ? '中日' : '中英'}，正在重连…`);
+      toast(`已切换到${PAIRS[next].name}${PAIRS[next].noAudio ? '（仅字幕，无译音）' : ''}，正在重连…`);
     } else {
-      toast(`已切换到${next === 'zhja' ? '中日' : '中英'}`);
+      toast(`已切换到${PAIRS[next].name}${PAIRS[next].noAudio ? '（仅字幕，无译音）' : ''}`);
     }
   };
 });
