@@ -1,0 +1,20 @@
+{
+  "name": "live-interpreter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "中英双向实时同声传译 · 基于 OpenAI gpt-realtime-translate",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node server.js --check",
+    "demo": "node server.js --mock"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "https-proxy-agent": "^7.0.6",
+    "protobufjs": "^8.7.1",
+    "ws": "^8.18.0"
+  }
+}

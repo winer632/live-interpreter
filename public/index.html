@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>实时同声传译 · 中 ⇄ English</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙</text></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">🎙</span>
+    <div>
+      <h1>实时同声传译</h1>
+      <p class="sub">中文 ⇄ English</p>
+    </div>
+  </div>
+
+  <div class="center">
+    <button id="startBtn" class="primary">开始传译</button>
+    <span id="status" class="status">未连接</span>
+    <span id="backendBadge" class="pill" hidden></span>
+    <span id="usageBadge" class="pill" hidden title="本次会话累计消耗"></span>
+    <span id="lagBadge" class="pill" hidden title="译音队列积压"></span>
+    <div class="meter" title="麦克风音量"><div id="meterFill" class="meter-fill"></div></div>
+  </div>
+
+  <div class="tools">
+    <div class="modes" role="group" aria-label="翻译方向">
+      <button data-mode="auto" class="active" title="自动识别说话人语种">自动</button>
+      <button data-mode="zh2en" title="锁定为中文转英文">中→英</button>
+      <button data-mode="en2zh" title="锁定为英文转中文">英→中</button>
+    </div>
+    <button id="muteBtn" class="ghost" title="点击静音，或按住空格键临时静音">🎤 麦克风</button>
+    <button id="clearBtn" class="ghost" title="清空字幕">清空</button>
+    <button id="fullscreenBtn" class="ghost" title="全屏展示给客户看">⛶</button>
+    <button id="settingsBtn" class="ghost" title="设置">⚙</button>
+  </div>
+</header>
+
+<div class="dir-strip">
+  <span id="dirBadge" class="dir-badge">等待发言…</span>
+</div>
+
+<main class="board">
+  <div class="col-head">
+    <div class="head zh">中文</div>
+    <div class="head-spacer"></div>
+    <div class="head en">English</div>
+  </div>
+
+  <div id="transcript" class="transcript">
+    <div id="emptyHint" class="empty">
+      <p class="big">点击「开始传译」，然后正常说话即可</p>
+      <ul>
+        <li>说中文 → 右侧出现英文字幕，扬声器播放英文语音</li>
+        <li>对方说英文 → 左侧出现中文字幕，扬声器播放中文语音</li>
+        <li>方向自动识别，识别不准时可用右上角「中→英 / 英→中」锁定</li>
+        <li>按 <kbd>空格</kbd> 可临时静音麦克风，按 <kbd>⛶</kbd> 全屏展示给客户</li>
+      </ul>
+    </div>
+  </div>
+</main>
+
+<dialog id="settings" class="settings">
+  <form method="dialog"><button id="closeSettings" class="close" aria-label="关闭">✕</button></form>
+  <h2>设置</h2>
+
+  <section>
+    <h3>翻译后端</h3>
+    <select id="backendSelect">
+      <option value="volcengine">火山引擎 · 同声传译 AST 2.0（国内直连，支付宝充值）</option>
+      <option value="openai">OpenAI · gpt-realtime-translate（需代理与境外信用卡）</option>
+    </select>
+    <p class="note">
+      两家都是语音进、语音出的专用同传模型。火山用 <code>zhen</code> 中英反转互译，
+      一条会话搞定双向；OpenAI 自动识别语种，需要开两条会话。切换后重新点「开始传译」生效。
+    </p>
+  </section>
+
+  <section>
+    <h3>火山引擎 API Key</h3>
+    <p id="volcStatus" class="hint">读取中…</p>
+    <div class="row">
+      <input id="volcKey" type="password" placeholder="控制台 API Key" autocomplete="off" spellcheck="false">
+      <button id="saveVolc" type="button" class="primary small">保存</button>
+      <button id="testVolc" type="button" class="ghost small">测试</button>
+    </div>
+    <p class="note">
+      在 <a href="https://console.volcengine.com" target="_blank" rel="noreferrer">火山引擎控制台</a>
+      → 服务中心 → 豆包语音 → 开通「同声传译」后获取。
+      资源 ID 固定为 <code>volc.service_type.10053</code>，已内置。
+    </p>
+  </section>
+
+  <section>
+    <h3>OpenAI API Key</h3>
+    <p id="openaiStatus" class="hint">读取中…</p>
+    <div class="row">
+      <input id="openaiKey" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false">
+      <button id="saveOpenai" type="button" class="primary small">保存</button>
+      <button id="testOpenai" type="button" class="ghost small">测试</button>
+    </div>
+    <p class="note">
+      需在 <a href="https://platform.openai.com/settings/organization/billing" target="_blank" rel="noreferrer">platform.openai.com</a>
+      单独充值（<strong>ChatGPT 会员额度不通用</strong>），约 $0.068/分钟。
+    </p>
+    <pre id="testResult" class="hint"></pre>
+  </section>
+
+  <section>
+    <h3>回声处理</h3>
+    <select id="echoSelect">
+      <option value="aec">仅系统回声消除（真·同声，可被打断）</option>
+      <option value="duck">播放译音时压低麦克风（火山默认）</option>
+      <option value="mute">播放译音时静音麦克风（最防啸叫）</option>
+    </select>
+    <p class="note">
+      同一房间外放时，扬声器的译音会被麦克风重新拾取。
+      <strong>OpenAI 后端</strong>有"播放期间冻结方向"这层保护，用「仅回声消除」即可；
+      <strong>火山</strong>是单会话双向，没有这层保护，默认用「压低麦克风」。
+      若仍有循环，先降低扬声器音量，再逐级加强。
+    </p>
+  </section>
+
+  <section>
+    <h3>扬声器音量 <span id="volumeLabel" class="pill">90%</span></h3>
+    <input id="volumeInput" type="range" min="0" max="100" value="90">
+    <p class="note">音量越低，麦克风回拾越少。同一房间建议 60–80%。</p>
+  </section>
+</dialog>
+
+<div id="toast" class="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
