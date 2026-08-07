@@ -230,25 +230,52 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 页面刷新后恢复现场
-  if (pathname === '/api/transcript') {
-    const { searchParams } = new URL(req.url, 'http://localhost');
-    const date = searchParams.get('date') || transcript.today();
-    const limit = Math.min(2000, Number(searchParams.get('limit')) || 500);
-    sendJson(res, 200, { date, dates: transcript.listDates(), lines: transcript.readLines(date, limit) });
+  // 归档文件清单（文件管理用）
+  if (pathname === '/api/transcripts') {
+    sendJson(res, 200, { today: transcript.today(), files: transcript.listFiles() });
     return;
   }
 
-  // 导出当天记录为 Markdown
+  // 读取某天的字幕：刷新恢复现场、以及文件管理里的"查看"
+  if (pathname === '/api/transcript' && req.method === 'GET') {
+    const { searchParams } = new URL(req.url, 'http://localhost');
+    const date = searchParams.get('date') || transcript.today();
+    const limit = Math.min(5000, Number(searchParams.get('limit')) || 500);
+    try {
+      sendJson(res, 200, { date, dates: transcript.listDates(), lines: transcript.readLines(date, limit) });
+    } catch (e) {
+      sendJson(res, 400, { ok: false, message: String(e.message || e) });
+    }
+    return;
+  }
+
+  // 删除某天的归档 —— 不可撤销，所以只认 DELETE，避免被预取之类的误触发
+  if (pathname === '/api/transcript' && req.method === 'DELETE') {
+    const { searchParams } = new URL(req.url, 'http://localhost');
+    try {
+      const removed = transcript.removeFile(searchParams.get('date'));
+      sendJson(res, 200, { ok: true, removed });
+    } catch (e) {
+      sendJson(res, 400, { ok: false, message: String(e.message || e) });
+    }
+    return;
+  }
+
+  // 导出：Markdown 或原始 JSONL
   if (pathname === '/api/export') {
     const { searchParams } = new URL(req.url, 'http://localhost');
     const date = searchParams.get('date') || transcript.today();
-    const md = transcript.exportMarkdown(date);
-    res.writeHead(200, {
-      'content-type': 'text/markdown; charset=utf-8',
-      'content-disposition': `attachment; filename="transcript-${date}.md"`,
-    });
-    res.end(md);
+    const raw = searchParams.get('format') === 'jsonl';
+    try {
+      const body = raw ? transcript.readRaw(date) : transcript.exportMarkdown(date);
+      res.writeHead(200, {
+        'content-type': raw ? 'application/x-ndjson; charset=utf-8' : 'text/markdown; charset=utf-8',
+        'content-disposition': `attachment; filename="transcript-${date}.${raw ? 'jsonl' : 'md'}"`,
+      });
+      res.end(body);
+    } catch (e) {
+      sendJson(res, 400, { ok: false, message: String(e.message || e) });
+    }
     return;
   }
 

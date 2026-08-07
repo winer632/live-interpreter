@@ -318,6 +318,58 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 }
 .pill.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
 
+/* ------------------------------------------------------ 记录文件管理 */
+
+.files-dialog { width: min(760px, 94vw); }
+
+.file-list { display: flex; flex-direction: column; gap: 6px; margin: 14px 0 4px; }
+
+.file-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+.file-row.today { border-color: var(--accent); }
+.file-row .meta { min-width: 0; }
+.file-row .date { font-weight: 650; font-size: 14px; }
+.file-row .date .tag {
+  font-size: 11px; font-weight: 500;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  padding: 1px 7px; border-radius: 999px; margin-left: 7px;
+}
+.file-row .sub { font-size: 12px; color: var(--fg-dim); margin-top: 3px; }
+.file-row .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.file-row .danger { color: var(--danger); border-color: transparent; }
+.file-row .danger:hover { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+
+.file-empty { color: var(--fg-dim); font-size: 13px; padding: 24px 4px; text-align: center; }
+
+.viewer-head {
+  display: flex; align-items: center; gap: 12px;
+  margin: 14px 0 10px; padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.viewer-head strong { font-size: 14px; }
+
+.viewer-body {
+  max-height: min(52vh, 460px);
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.viewer-line { padding: 8px 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent); }
+.viewer-line .t { color: var(--fg-dim); font: 11px/1 ui-monospace, monospace; margin-right: 8px; }
+.viewer-line .s { color: var(--fg-dim); }
+.viewer-line .d { color: var(--fg); display: block; margin-top: 3px; padding-left: 2px; }
+.viewer-line.zh2en .d, .viewer-line.zh2ja .d { color: var(--en); }
+.viewer-line.en2zh .d, .viewer-line.ja2zh .d, .viewer-line.yue2zh .d { color: var(--zh); }
+
 /* ---------------------------------------------------------- 提示条 */
 
 .toast {

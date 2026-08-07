@@ -27,17 +27,60 @@ export function today(d = new Date()) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * date 来自 HTTP 查询参数，会直接拼进文件路径，必须严格校验：
+ * 不校验的话 ?date=../../etc/passwd 就能读写归档目录之外的文件。
+ * 先用正则卡死格式，再用 resolve 复核一遍最终路径确实落在目录内。
+ */
 function fileFor(date) {
-  return path.join(DIR, `${date}.jsonl`);
+  if (!DATE_RE.test(String(date))) throw new Error(`非法日期：${date}`);
+  const file = path.resolve(DIR, `${date}.jsonl`);
+  if (path.dirname(file) !== path.resolve(DIR)) throw new Error('路径越界');
+  return file;
 }
 
 export function listDates() {
   ensureDir();
   return fs.readdirSync(DIR)
-    .filter((f) => f.endsWith('.jsonl'))
+    .filter((f) => f.endsWith('.jsonl') && DATE_RE.test(f.replace(/\.jsonl$/, '')))
     .map((f) => f.replace(/\.jsonl$/, ''))
     .sort()
     .reverse();
+}
+
+/** 文件管理用：每个归档的概览 */
+export function listFiles() {
+  return listDates().map((date) => {
+    const records = readRecords(date);
+    const lines = records.filter((r) => r.t === 'line');
+    const sessions = records.filter((r) => r.t === 'session');
+    let bytes = 0;
+    try { bytes = fs.statSync(fileFor(date)).size; } catch {}
+    return {
+      date,
+      bytes,
+      lines: lines.length,
+      sessions: sessions.length,
+      firstAt: lines[0]?.at || sessions[0]?.at || null,
+      lastAt: lines[lines.length - 1]?.at || null,
+    };
+  });
+}
+
+/** 原始 JSONL，用于下载 */
+export function readRaw(date) {
+  const file = fileFor(date);
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+}
+
+/** 删除某天的归档。不可撤销，调用方须先确认。 */
+export function removeFile(date) {
+  const file = fileFor(date);
+  if (!fs.existsSync(file)) return false;
+  fs.unlinkSync(file);
+  return true;
 }
 
 function append(record) {

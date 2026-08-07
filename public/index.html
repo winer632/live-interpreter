@@ -34,7 +34,7 @@
       <button data-pair="yuezh" title="粤语 → 普通话，单向。火山只提供 s2t，所以只有字幕、没有译音；反向（普通话→粤语）服务端无对应模型">粤→普</button>
     </div>
     <button id="muteBtn" class="ghost" title="点击静音，或按住空格键临时静音">🎤 麦克风</button>
-    <button id="exportBtn" class="ghost" title="导出当天全部字幕为 Markdown">导出</button>
+    <button id="filesBtn" class="ghost" title="查看、导出、删除历史传译记录">记录</button>
     <button id="clearBtn" class="ghost" title="清空屏幕（不影响已归档内容）">清空</button>
     <button id="fullscreenBtn" class="ghost" title="全屏展示给客户看">⛶</button>
     <button id="settingsBtn" class="ghost" title="设置">⚙</button>
@@ -156,6 +156,25 @@
     <input id="volumeInput" type="range" min="0" max="100" value="90">
     <p class="note">音量越低，麦克风回拾越少。同一房间建议 60–80%。</p>
   </section>
+</dialog>
+
+<dialog id="files" class="settings files-dialog">
+  <form method="dialog"><button id="closeFiles" class="close" aria-label="关闭">✕</button></form>
+  <h2>传译记录</h2>
+  <p class="note" style="margin-top:0">
+    每句定稿后自动归档，一天一个文件，存在项目目录的 <code>transcripts/</code> 下。
+  </p>
+
+  <div id="fileList" class="file-list"></div>
+
+  <div id="fileViewer" hidden>
+    <div class="viewer-head">
+      <button id="backToList" type="button" class="ghost small">← 返回列表</button>
+      <strong id="viewerTitle"></strong>
+      <span id="viewerMeta" class="hint" style="margin:0"></span>
+    </div>
+    <div id="viewerBody" class="viewer-body"></div>
+  </div>
 </dialog>
 
 <div id="toast" class="toast"></div>

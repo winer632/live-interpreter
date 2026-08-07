@@ -77,7 +77,15 @@ const el = {
   fullscreenBtn: $('#fullscreenBtn'),
   muteBtn: $('#muteBtn'),
   toast: $('#toast'),
-  exportBtn: $('#exportBtn'),
+  filesBtn: $('#filesBtn'),
+  files: $('#files'),
+  closeFiles: $('#closeFiles'),
+  fileList: $('#fileList'),
+  fileViewer: $('#fileViewer'),
+  viewerTitle: $('#viewerTitle'),
+  viewerMeta: $('#viewerMeta'),
+  viewerBody: $('#viewerBody'),
+  backToList: $('#backToList'),
   usageBadge: $('#usageBadge'),
   lagBadge: $('#lagBadge'),
   termList: $('#termList'),
@@ -739,13 +747,112 @@ async function restoreHistory() {
   el.transcript.scrollTop = Number.MAX_SAFE_INTEGER;
 }
 
-el.exportBtn.onclick = () => {
-  // 走 <a download> 而不是 fetch，让浏览器直接接管下载
+/** 走 <a download> 而不是 fetch，让浏览器直接接管下载 */
+function download(url) {
   const a = document.createElement('a');
-  a.href = '/api/export';
+  a.href = url;
   a.download = '';
   a.click();
+}
+
+const fmtBytes = (n) =>
+  n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB`
+    : n >= 1024 ? `${(n / 1024).toFixed(1)} KB`
+    : `${n} B`;
+
+const fmtTime = (iso) => {
+  if (!iso) return '';
+  return new Date(iso).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' });
 };
+
+async function renderFileList() {
+  el.fileViewer.hidden = true;
+  el.fileList.hidden = false;
+
+  const r = await fetch('/api/transcripts').then((x) => x.json()).catch(() => null);
+  if (!r) { el.fileList.innerHTML = '<div class="file-empty">读取失败</div>'; return; }
+
+  if (!r.files.length) {
+    el.fileList.innerHTML = '<div class="file-empty">还没有任何归档。开始传译后会自动生成。</div>';
+    return;
+  }
+
+  el.fileList.innerHTML = '';
+  for (const f of r.files) {
+    const isToday = f.date === r.today;
+    const row = document.createElement('div');
+    row.className = `file-row${isToday ? ' today' : ''}`;
+
+    const span = f.firstAt && f.lastAt && f.firstAt !== f.lastAt
+      ? `${fmtTime(f.firstAt)}–${fmtTime(f.lastAt)}` : fmtTime(f.firstAt);
+
+    row.innerHTML = `
+      <div class="meta">
+        <div class="date">${f.date}${isToday ? '<span class="tag">今天</span>' : ''}</div>
+        <div class="sub">${f.lines} 句 · ${f.sessions} 场会谈 · ${fmtBytes(f.bytes)}${span ? ` · ${span}` : ''}</div>
+      </div>
+      <div class="acts">
+        <button type="button" class="ghost small act-view">查看</button>
+        <button type="button" class="ghost small act-md">Markdown</button>
+        <button type="button" class="ghost small act-raw">JSONL</button>
+        <button type="button" class="ghost small danger act-del">删除</button>
+      </div>`;
+
+    row.querySelector('.act-view').onclick = () => viewFile(f);
+    row.querySelector('.act-md').onclick = () => download(`/api/export?date=${f.date}`);
+    row.querySelector('.act-raw').onclick = () => download(`/api/export?date=${f.date}&format=jsonl`);
+    row.querySelector('.act-del').onclick = () => deleteFile(f, isToday);
+    el.fileList.appendChild(row);
+  }
+}
+
+async function viewFile(f) {
+  const r = await fetch(`/api/transcript?date=${f.date}&limit=5000`).then((x) => x.json()).catch(() => null);
+  if (!r?.lines) { toast('读取失败', 'err'); return; }
+
+  el.fileList.hidden = true;
+  el.fileViewer.hidden = false;
+  el.viewerTitle.textContent = f.date;
+  el.viewerMeta.textContent = `${r.lines.length} 句`;
+
+  el.viewerBody.innerHTML = '';
+  for (const l of r.lines) {
+    const div = document.createElement('div');
+    div.className = `viewer-line ${l.dir || ''}`;
+    // 用 textContent 逐段写入，字幕内容不可信任，绝不拼进 innerHTML
+    const t = document.createElement('span');
+    t.className = 't';
+    t.textContent = fmtTime(l.at);
+    const s = document.createElement('span');
+    s.className = 's';
+    s.textContent = l.src || '';
+    const d = document.createElement('span');
+    d.className = 'd';
+    d.textContent = l.dst || '';
+    div.append(t, s, d);
+    el.viewerBody.appendChild(div);
+  }
+}
+
+async function deleteFile(f, isToday) {
+  const warn = isToday
+    ? `\n\n注意：这是今天的记录，正在进行的会谈仍会继续往里写。`
+    : '';
+  if (!confirm(`确定删除 ${f.date} 的归档吗？\n\n${f.lines} 句 · ${f.sessions} 场会谈\n此操作不可撤销。${warn}`)) return;
+
+  const r = await fetch(`/api/transcript?date=${f.date}`, { method: 'DELETE' })
+    .then((x) => x.json()).catch(() => null);
+  if (r?.ok) {
+    toast(`已删除 ${f.date}`, 'ok');
+    renderFileList();
+  } else {
+    toast(r?.message || '删除失败', 'err');
+  }
+}
+
+el.filesBtn.onclick = () => { el.files.showModal(); renderFileList(); };
+el.closeFiles.onclick = () => el.files.close();
+el.backToList.onclick = () => renderFileList();
 
 // ------------------------------------------------------------ 初始化
 
