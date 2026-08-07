@@ -60,6 +60,9 @@ node test-live.mjs zh "这是我们 SensePedia 的产品经理"   # 自定义文
 
 资源 ID 固定 `volc.service_type.10053`，已内置。按音频时长计费。
 
+在 <https://console.volcengine.com/speech/new/experience/translate?projectName=default>
+页面可以看到火山引擎 token 余额。
+
 ### OpenAI（备选）
 
 > ⚠️ **ChatGPT Plus / Pro 会员额度不能用于 API**，两者计费完全独立。
@@ -209,7 +212,9 @@ int16 数据按 float32 解读则指数位随机、绝大多数会变成 1e30 �
 传了 `speaker_id` 就输出不了日语。
 
 **拿不到账户余额**：`UsageResponse` 只回本次消耗，余额要走另一套需 AK/SK
-签名的 OpenAPI。所以界面显示的是"已用"而非"剩余"。
+签名的 OpenAPI。所以界面显示的是"已用"而非"剩余"。余额请到
+[控制台的同声传译体验页](https://console.volcengine.com/speech/new/experience/translate?projectName=default)
+查看。
 
 ### 方向判定
 
