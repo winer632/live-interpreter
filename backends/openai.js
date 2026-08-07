@@ -40,7 +40,9 @@ function sessionUpdate(targetLang) {
 }
 
 export class OpenAIBackend {
-  constructor({ apiKey, options = {}, emit }) {
+  constructor({ apiKey, speak = true, options = {}, emit }) {
+    // 这个端点没有纯文本模式，音频照样生成、照样计费，关掉只是不再往浏览器转发
+    this.speak = speak;
     this.apiKey = apiKey;
     this.emit = emit;
     this.router = new DirectionRouter();
@@ -80,7 +82,7 @@ export class OpenAIBackend {
         s.retries = 0;
         this.readyCount += 1;
         if (this.readyCount >= 2) {
-          this.emit({ t: 'ready', backend: 'openai', inputRate: INPUT_RATE });
+          this.emit({ t: 'ready', backend: 'openai', pair: 'zhen', noAudio: !this.speak, inputRate: INPUT_RATE });
         }
       });
 
@@ -145,7 +147,7 @@ export class OpenAIBackend {
       }
 
       case 'session.output_audio.delta': {
-        if (!msg.delta || !this.router.active(s.dir)) break;
+        if (!msg.delta || !this.speak || !this.router.active(s.dir)) break;
         this.router.notePlayback(pcmDurationMs(msg.delta, OUTPUT_RATE));
         this.emit({ t: 'audio', pcm: msg.delta });
         break;

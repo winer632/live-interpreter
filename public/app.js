@@ -51,6 +51,8 @@ const state = {
   echoGuard: 'aec',      // aec | duck | mute
   volume: 0.9,
   micMuted: false,
+  speak: true,           // 是否把译文念出来
+  sessionHasAudio: true, // 本次会话是否真的在产出译音（以 s2t 起的会话就没有）
   lines: new Map(),      // id → { data, node }
 };
 
@@ -89,6 +91,7 @@ const el = {
   fullscreenBtn: $('#fullscreenBtn'),
   muteBtn: $('#muteBtn'),
   toast: $('#toast'),
+  speakBtn: $('#speakBtn'),
   filesBtn: $('#filesBtn'),
   files: $('#files'),
   closeFiles: $('#closeFiles'),
@@ -247,9 +250,7 @@ class Player {
 
     if (backlog > BACKLOG_HARD) {
       // 追不上了，砍掉积压重新对齐
-      for (const s of this.sources) { try { s.stop(); } catch {} }
-      this.sources.clear();
-      this.next = 0;
+      this.flush();
       this.dropped += 1;
       backlog = 0;
     }
@@ -274,6 +275,13 @@ class Player {
   }
 
   get playing() { return this.ctx.currentTime < this.next - 0.02; }
+
+  /** 立刻掐掉已排队但还没播的译音（关译音、或积压过多时用） */
+  flush() {
+    for (const s of this.sources) { try { s.stop(); } catch {} }
+    this.sources.clear();
+    this.next = 0;
+  }
 
   setVolume(v) { this.gain.gain.value = v; }
 
@@ -353,7 +361,7 @@ function startEchoGuard() {
 
     // 每 500ms 刷新一次译音积压，落后太多时给出可见提示
     if (++tick % 10 === 0 && audio.player) {
-      const lag = audio.player.backlog;
+      const lag = state.speak ? audio.player.backlog : 0;
       if (lag > 1) {
         el.lagBadge.textContent = `译音滞后 ${lag.toFixed(1)}s`;
         el.lagBadge.className = `pill ${lag > 4 ? 'warn' : ''}`;
@@ -445,7 +453,8 @@ function send(obj) {
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws?pair=${state.pair}`);
+  // speak 是建连参数：不要译音时上游直接走 s2t，省掉约六成 token
+  ws = new WebSocket(`${proto}://${location.host}/ws?pair=${state.pair}&speak=${state.speak ? 1 : 0}`);
 
   ws.onmessage = async (e) => {
     let m;
@@ -456,6 +465,8 @@ function connect() {
         state.epoch += 1;
         state.backend = m.backend;
         state.inputRate = m.inputRate;
+        // 服务端告诉我们这条会话到底有没有译音（以 s2t 起的就没有）
+        state.sessionHasAudio = !m.noAudio;
         el.backendBadge.textContent = { volcengine: '火山 AST', openai: 'OpenAI', mock: '演示' }[m.backend] || m.backend;
         el.backendBadge.hidden = false;
 
@@ -490,6 +501,7 @@ function connect() {
         break;
 
       case 'audio':
+        if (!state.speak) break;
         audio.player?.push(pcm16ToFloat32(m.pcm));
         break;
 
@@ -687,6 +699,7 @@ el.pairSelect.onchange = () => {
   state.pair = next;
   el.headLeft.textContent = PAIRS[next].left;
   el.headRight.textContent = PAIRS[next].right;
+  updateSpeakBtn();
   setDirection(null);
 
   const note = PAIRS[next].noAudio ? '（仅字幕，无译音）' : '';
@@ -721,6 +734,51 @@ function setMicMuted(muted) {
   el.muteBtn.classList.toggle('active', muted);
   el.muteBtn.textContent = muted ? '🔇 已静音' : '🎤 麦克风';
 }
+
+// ------------------------------------------------------------ 译音开关
+
+/**
+ * 关掉译音时做两件事，一件立刻、一件下次生效：
+ *   · 立刻：不再往播放器灌数据，并掐掉已排队的，会中切换零延迟、不断流
+ *   · 下次开始传译时：以 speak=0 建连，上游直接走 s2t，省掉约六成 token
+ *
+ * 反过来，如果这条会话本来就是以 s2t 起的（没有译音可放），中途想打开就只能重连。
+ */
+function updateSpeakBtn() {
+  const pairSilent = Boolean(PAIRS[state.pair].noAudio);
+  el.speakBtn.disabled = pairSilent;
+  if (pairSilent) {
+    el.speakBtn.textContent = '🔇 无译音';
+    el.speakBtn.title = `${PAIRS[state.pair].name} 走的是语音转文本，火山没有对应的译音模型，本来就只有字幕`;
+    el.speakBtn.classList.remove('active');
+    return;
+  }
+  el.speakBtn.textContent = state.speak ? '🔊 译音' : '🔇 译音关';
+  el.speakBtn.classList.toggle('active', !state.speak);
+  el.speakBtn.title = state.speak
+    ? '点击关闭译音，只保留字幕'
+    : '点击开启译音。关闭状态下开始传译会自动改用纯文本模式，省掉约六成 token';
+}
+
+function setSpeak(on) {
+  state.speak = on;
+  updateSpeakBtn();
+  if (!state.running) return;
+
+  if (!on) {
+    audio.player?.flush();   // 掐掉已排队但还没播的
+    toast('译音已关闭。本次会话仍在产生音频用量，下次开始传译会自动省去');
+    return;
+  }
+  // 本次会话没有译音可放，只能重连
+  if (!state.sessionHasAudio) {
+    toast('本次会话启动时未请求译音，正在重连以启用…');
+    stop();
+    setTimeout(start, 200);
+  }
+}
+
+el.speakBtn.onclick = () => setSpeak(!state.speak);
 
 // 空格键按住临时静音麦克风（应急打断用）
 document.addEventListener('keydown', (e) => {
@@ -889,6 +947,7 @@ function renderHints() {
 (async function init() {
   setStatus('未连接', '');
   renderHints();
+  updateSpeakBtn();
   el.volumeLabel.textContent = `${el.volumeInput.value}%`;
   state.volume = Number(el.volumeInput.value) / 100;
 

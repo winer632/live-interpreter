@@ -76,11 +76,16 @@ const E = {
   TranslationSubtitleEnd: 655,
 };
 
-/** 每个语言对需要开哪些上游会话 */
-function planSessions(pair) {
+/**
+ * 每个语言对需要开哪些上游会话。
+ *
+ * @param {boolean} speak 是否需要译音。不需要时一律降级为 s2t ——
+ *   实测 output_audio_tokens 约占总 token 的六成，只在浏览器端静音等于白烧。
+ */
+function planSessions(pair, speak = true) {
   // 中英是唯一有反转值的：一条会话包办双向，方向由它自己的原文转写判定
   if (pair.id === 'zhen') {
-    return [{ src: 'zhen', dst: 'zhen', dir: null, routes: true, mode: 's2s' }];
+    return [{ src: 'zhen', dst: 'zhen', dir: null, routes: true, mode: speak ? 's2s' : 's2t' }];
   }
 
   // 方言（粤语、上海话）：单向、且只能出字幕。实测 s2s 的
@@ -99,7 +104,7 @@ function planSessions(pair) {
   //
   // 韩泰不在 s2s 的 8 语种里（zh/en/ja/de/fr/es/pt/id），只能走 s2t，因此没有译音。
   const x = pair.b;
-  const mode = pair.noAudio ? 's2t' : 's2s';
+  const mode = (pair.noAudio || !speak) ? 's2t' : 's2s';
   return [
     { src: 'zh', dst: x, dir: `zh2${x}`, routes: false, mode },
     { src: x, dst: 'zh', dir: `${x}2zh`, routes: true, mode },
@@ -119,10 +124,11 @@ export class VolcengineBackend {
    * @param {object} [o.options]     terms / speakerId / speechRate
    * @param {Function} o.emit        向浏览器发送归一化事件
    */
-  constructor({ apiKey, resourceId, appKey, accessKey, pair = 'zhen', options = {}, emit }) {
+  constructor({ apiKey, resourceId, appKey, accessKey, pair = 'zhen', speak = true, options = {}, emit }) {
     loadProto();
     this.auth = { apiKey, resourceId, appKey, accessKey };
     this.pair = PAIRS[pair] || PAIRS.zhen;
+    this.speak = speak;
     this.options = options;
     this.emit = emit;
     this.router = new DirectionRouter(this.pair);
@@ -151,7 +157,7 @@ export class VolcengineBackend {
     // 单向语言对方向定死；双会话时先给个默认方向，否则开场谁都不放行
     if (this.pair.oneWay || this.pair.id === 'zhja') this.router.dir = this.router.forward;
 
-    this.sessions = planSessions(this.pair).map((plan) => ({
+    this.sessions = planSessions(this.pair, this.speak).map((plan) => ({
       plan,
       ws: null,
       sessionId: null,
@@ -348,7 +354,7 @@ export class VolcengineBackend {
             t: 'ready',
             backend: 'volcengine',
             pair: this.pair.id,
-            noAudio: Boolean(this.pair.noAudio),
+            noAudio: Boolean(this.pair.noAudio) || !this.speak,
             inputRate: INPUT_RATE,
             logId: sess.logId,
           });

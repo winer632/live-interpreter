@@ -300,10 +300,13 @@ server.on('upgrade', (req, socket, head) => {
   // 语言对在建连时定死：中日要开两条上游会话，中英只开一条，切换必须重连
   const requested = searchParams.get('pair');
   const pair = PAIRS[requested] ? requested : 'zhen';
-  wss.handleUpgrade(req, socket, head, (client) => session(client, pair));
+  // 不要译音时直接让上游走 s2t —— 实测 output_audio_tokens 约占总量六成，
+  // 只在浏览器端静音等于白烧这笔钱
+  const speak = searchParams.get('speak') !== '0';
+  wss.handleUpgrade(req, socket, head, (client) => session(client, pair, speak));
 });
 
-async function session(client, pair = 'zhen') {
+async function session(client, pair = 'zhen', speak = true) {
   const cfg = readConfig();
   const backendName = MOCK ? 'mock' : cfg.backend;
   // 演示模式不脏化归档
@@ -328,7 +331,7 @@ async function session(client, pair = 'zhen') {
         client.close();
         return;
       }
-      backend = new VolcengineBackend({ ...cfg.volcengine, pair, options: cfg.options, emit });
+      backend = new VolcengineBackend({ ...cfg.volcengine, pair, speak, options: cfg.options, emit });
       backend.start(await agentFor('volcengine'));
     } else {
       if (!cfg.openai.apiKey) {
@@ -341,7 +344,9 @@ async function session(client, pair = 'zhen') {
         client.close();
         return;
       }
-      backend = new OpenAIBackend({ apiKey: cfg.openai.apiKey, options: cfg.options, emit });
+      // OpenAI 的端点没有纯文本模式，音频照样会生成、照样计费，
+      // 这里只是不再往浏览器转发
+      backend = new OpenAIBackend({ apiKey: cfg.openai.apiKey, speak, options: cfg.options, emit });
       backend.start(await agentFor('openai'));
     }
   } catch (err) {
