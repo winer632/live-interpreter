@@ -61,7 +61,7 @@ export class MockBackend {
   }
 
   start() {
-    this.emit({ t: 'ready', backend: 'mock', inputRate: INPUT_RATE });
+    this.emit({ t: 'ready', backend: 'mock', pair: 'zhen', inputRate: INPUT_RATE });
 
     SCRIPT.forEach((utt, idx) => {
       const t0 = idx * UTT_MS + 700;

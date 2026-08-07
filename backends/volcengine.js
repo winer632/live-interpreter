@@ -8,9 +8,21 @@
  *   · 请求 data.speech.ast.TranslateRequest，响应 data.speech.ast.TranslateResponse
  *   · 鉴权走 HTTP 请求头，新版控制台只需 X-Api-Key + X-Api-Resource-Id
  *
- * 中英双向只需要**一条**会话：source_language 和 target_language 同时传 `zhen`
- * （官方称"中英反转互译"，示例：`你好，everyone` → `Hello，大家`）。
- * 这比 OpenAI 那边开两条会话省一半钱，还能处理一句话里中英混杂的情况。
+ * 两个语言对的实现方式不同，因为火山只给了中英一个反转值：
+ *
+ *   中英 zhen —— **一条**会话。source_language 和 target_language 同时传 `zhen`
+ *                （官方称"中英反转互译"，示例：`你好，everyone` → `Hello，大家`），
+ *                方向由模型自己处理，还能应付一句话里中英混杂。
+ *
+ *   中日 zhja —— 没有 `zhja` 这种值，只能开**两条**会话（zh→ja 和 ja→zh），
+ *                同一路音频喂给两条，再靠 DirectionRouter 放行其中一条。
+ *                实测发现 ASR 并不强制按声明的源语种识别：喂中文时两条会话都
+ *                如实转写出中文，其中 ja→zh 那条因为源语种==目标语种而原样透传。
+ *                所以判别信号很干净 —— 只看 ja→zh 那条的原文有没有假名：
+ *                有假名说明在说日语，没有说明在说中文。
+ *
+ * 另外，中日只能走**声音复刻模式**（不传 speaker_id）：文档规定 s2s 指定音色模式
+ * 下"目标语种必须为中英"，传了 speaker_id 就没法输出日语了。
  */
 
 import path from 'node:path';
@@ -19,7 +31,7 @@ import crypto from 'node:crypto';
 import protobuf from 'protobufjs';
 import { WebSocket } from 'ws';
 import {
-  DirectionRouter, LineBuilder, pcmDurationMs, mergeText, buildCorpus, applyCorrections,
+  DirectionRouter, LineBuilder, PAIRS, pcmDurationMs, mergeText, buildCorpus, applyCorrections,
 } from './common.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -27,13 +39,12 @@ const PROTO_DIR = path.join(__dirname, '..', 'protos');
 const ENDPOINT = 'wss://openspeech.bytedance.com/api/v4/ast/v2/translate';
 
 export const INPUT_RATE = 16000;   // 源音频固定 16kHz 16bit 单声道
-export const OUTPUT_RATE = 24000;  // 译音我们要 PCM，浏览器可直接播
+export const OUTPUT_RATE = 24000;  // 译音要 PCM，浏览器可直接播
 
 // ---------------------------------------------------------------- protobuf
 
 let TranslateRequest;
 let TranslateResponse;
-let EV;
 
 function loadProto() {
   if (TranslateRequest) return;
@@ -42,7 +53,6 @@ function loadProto() {
   root.loadSync('products/understanding/ast/ast_service.proto', { keepCase: true });
   TranslateRequest = root.lookupType('data.speech.ast.TranslateRequest');
   TranslateResponse = root.lookupType('data.speech.ast.TranslateResponse');
-  EV = root.lookupEnum('data.speech.event.Type').values;
 }
 
 // 事件号取自 events.proto，写成常量便于阅读
@@ -66,6 +76,19 @@ const E = {
   TranslationSubtitleEnd: 655,
 };
 
+/** 每个语言对需要开哪些上游会话 */
+function planSessions(pair) {
+  if (pair.id === 'zhja') {
+    return [
+      { src: 'zh', dst: 'ja', dir: 'zh2ja', routes: false },
+      // 这条的原文转写是判方向的唯一依据：有假名=在说日语
+      { src: 'ja', dst: 'zh', dir: 'ja2zh', routes: true },
+    ];
+  }
+  // 中英：一条会话包办双向，方向由它自己的原文转写判定
+  return [{ src: 'zhen', dst: 'zhen', dir: null, routes: true }];
+}
+
 // ------------------------------------------------------------------ 后端
 
 export class VolcengineBackend {
@@ -75,73 +98,84 @@ export class VolcengineBackend {
    * @param {string} o.resourceId    固定 volc.service_type.10053
    * @param {string} [o.appKey]      旧版控制台 App Id
    * @param {string} [o.accessKey]   旧版控制台 Access Token
-   * @param {object} [o.options]     speakerId / speechRate / hotWords / glossary
+   * @param {string} [o.pair]        zhen | zhja
+   * @param {object} [o.options]     terms / speakerId / speechRate
    * @param {Function} o.emit        向浏览器发送归一化事件
    */
-  constructor({ apiKey, resourceId, appKey, accessKey, options = {}, emit }) {
+  constructor({ apiKey, resourceId, appKey, accessKey, pair = 'zhen', options = {}, emit }) {
     loadProto();
     this.auth = { apiKey, resourceId, appKey, accessKey };
+    this.pair = PAIRS[pair] || PAIRS.zhen;
     this.options = options;
     this.emit = emit;
-    this.router = new DirectionRouter();
+    this.router = new DirectionRouter(this.pair);
     // 火山负责把音听对（hot_words），写法由这一层统一规范
     this.lines = new LineBuilder(emit, {
       transform: (t) => applyCorrections(t, options.terms),
     });
-    this.ws = null;
-    this.sessionId = null;
+    this.sessions = [];
     this.running = false;
-    this.started = false;
-    this.pending = [];
-    this.retries = 0;
+    this.readyCount = 0;
   }
 
   get inputRate() { return INPUT_RATE; }
+
+  /** 单会话（中英）时永远放行；双会话（中日）时按方向闸门放行 */
+  _isActive(sess) {
+    if (this.sessions.length === 1) return true;
+    return this.router.active(sess.plan.dir);
+  }
 
   // ------------------------------------------------------------ 连接
 
   start(agent) {
     this.running = true;
     this.agent = agent;
-    this._connect();
+    // 双会话时先给一个默认方向，否则开场谁都不放行
+    if (this.pair.id === 'zhja') this.router.dir = this.router.forward;
+
+    this.sessions = planSessions(this.pair).map((plan) => ({
+      plan,
+      ws: null,
+      sessionId: null,
+      started: false,
+      srcAccum: '',
+      pending: [],
+      retries: 0,
+      logId: null,
+    }));
+    for (const s of this.sessions) this._connect(s);
   }
 
   _headers() {
-    const connectId = crypto.randomUUID();
-    // 新版控制台只要 API Key；没有则回退到旧版的 AppKey + AccessKey
     const h = {
       'X-Api-Resource-Id': this.auth.resourceId || 'volc.service_type.10053',
-      'X-Api-Connect-Id': connectId,
+      'X-Api-Connect-Id': crypto.randomUUID(),
     };
+    // 新版控制台只要 API Key；没有则回退到旧版的 AppKey + AccessKey
     if (this.auth.apiKey) h['X-Api-Key'] = this.auth.apiKey;
     if (this.auth.appKey) h['X-Api-App-Key'] = this.auth.appKey;
     if (this.auth.accessKey) h['X-Api-Access-Key'] = this.auth.accessKey;
     return h;
   }
 
-  _connect() {
-    this.started = false;
-    this.sessionId = crypto.randomUUID();
+  _connect(sess) {
+    sess.started = false;
+    sess.sessionId = crypto.randomUUID();
 
-    this.ws = new WebSocket(ENDPOINT, {
+    const ws = new WebSocket(ENDPOINT, {
       agent: this.agent,
       headers: this._headers(),
       maxPayload: 64 * 1024 * 1024,
     });
-    this.ws.binaryType = 'nodebuffer';
+    ws.binaryType = 'nodebuffer';
+    sess.ws = ws;
 
-    this.ws.on('open', () => {
-      this.logId = null;
-      this._send(this._startSessionMessage());
-    });
+    ws.on('upgrade', (res) => { sess.logId = res.headers['x-tt-logid'] || null; });
+    ws.on('open', () => this._send(sess, this._startSessionMessage(sess)));
+    ws.on('message', (data) => this._onMessage(sess, data));
 
-    this.ws.on('upgrade', (res) => {
-      this.logId = res.headers['x-tt-logid'] || null;
-    });
-
-    this.ws.on('message', (data) => this._onMessage(data));
-
-    this.ws.on('unexpected-response', (_req, res) => {
+    ws.on('unexpected-response', (_req, res) => {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => {
@@ -155,17 +189,18 @@ export class VolcengineBackend {
       });
     });
 
-    this.ws.on('error', (err) => {
+    ws.on('error', (err) => {
       this.emit({ t: 'error', message: describeNetworkError(err), detail: String(err?.message || err) });
     });
 
-    this.ws.on('close', () => {
-      this.started = false;
+    ws.on('close', () => {
+      if (sess.started) this.readyCount -= 1;
+      sess.started = false;
       if (!this.running) return;
       // AST 会话有时长上限，正常断开后重开一条，音频照常继续
-      if (this.retries < 8) {
-        this.retries += 1;
-        setTimeout(() => this.running && this._connect(), Math.min(400 * this.retries, 3000));
+      if (sess.retries < 8) {
+        sess.retries += 1;
+        setTimeout(() => this.running && this._connect(sess), Math.min(400 * sess.retries, 3000));
       } else {
         this.emit({ t: 'closed', reason: '重连次数过多' });
       }
@@ -181,42 +216,41 @@ export class VolcengineBackend {
 
   // ------------------------------------------------------------ 发送
 
-  _send(obj) {
-    if (this.ws?.readyState !== WebSocket.OPEN) return;
-    const msg = TranslateRequest.create(obj);
-    this.ws.send(TranslateRequest.encode(msg).finish());
+  _send(sess, obj) {
+    if (sess.ws?.readyState !== WebSocket.OPEN) return;
+    sess.ws.send(TranslateRequest.encode(TranslateRequest.create(obj)).finish());
   }
 
-  _startSessionMessage() {
+  _startSessionMessage(sess) {
     const o = this.options;
+    const { src, dst } = sess.plan;
     const request = {
       mode: 's2s',
-      // zhen = 中英反转互译：一条会话同时处理两个方向
-      source_language: o.sourceLanguage || 'zhen',
-      target_language: o.targetLanguage || 'zhen',
+      source_language: src,
+      target_language: dst,
       enable_source_language_detect: true,
     };
-    if (o.speakerId) {
+
+    // 指定音色模式要求"目标语种必须为中英"，所以目标是日语时绝不能传 speaker_id，
+    // 只能走声音复刻模式（复刻说话人音色）
+    const targetIsZhEn = dst === 'zh' || dst === 'en' || dst === 'zhen';
+    if (o.speakerId && targetIsZhEn) {
       request.speaker_id = o.speakerId;
-      // 走精品/复刻音色链路时必须带 tts_resource_id
       request.tts_resource_id = o.ttsResourceId || 'seed-tts-2.0';
     }
     if (typeof o.speechRate === 'number') request.speech_rate = o.speechRate;
 
-    // 术语库：一条术语同时喂给热词（识别）、替换词（后处理）、术语表（翻译）
+    // 术语库：热词让模型把音听对，译音因此也念得对
     const corpus = buildCorpus(o.terms);
-    if (corpus) {
-      request.corpus = corpus;
-      console.log('[volc] 术语库已下发:', JSON.stringify(corpus));
-    }
+    if (corpus) request.corpus = corpus;
 
     return {
-      request_meta: { SessionID: this.sessionId },
+      request_meta: { SessionID: sess.sessionId },
       event: E.StartSession,
       user: { uid: 'live-interpreter', did: 'mac-desktop', platform: 'web' },
       source_audio: { format: 'pcm', rate: INPUT_RATE, bits: 16, channel: 1 },
-      // bits/channel 必须显式指定：只给 format 和 rate 时，服务端返回的是
-      // float32 PCM，按 int16 解读就是一片噪声
+      // 文档：pcm 在 24000Hz 下默认 32float、16000Hz 下默认 16bit。
+      // 这里显式声明 16bit，同时接收端还有 float32 自动识别兜底。
       target_audio: { format: 'pcm', rate: OUTPUT_RATE, bits: 16, channel: 1 },
       request,
       denoise: true,
@@ -226,18 +260,20 @@ export class VolcengineBackend {
   /** @param {string} base64 16kHz PCM16 单声道 */
   sendAudio(base64) {
     const buf = Buffer.from(base64, 'base64');
-    if (!this.started) {
-      // 会话尚未建立，先攒着（最多约 4 秒），避免开头掉字
-      if (this.pending.length > 100) this.pending.shift();
-      this.pending.push(buf);
-      return;
+    for (const sess of this.sessions) {
+      if (!sess.started) {
+        // 会话尚未建立，先攒着（最多约 4 秒），避免开头掉字
+        if (sess.pending.length > 100) sess.pending.shift();
+        sess.pending.push(buf);
+        continue;
+      }
+      this._sendAudioBuffer(sess, buf);
     }
-    this._sendAudioBuffer(buf);
   }
 
-  _sendAudioBuffer(buf) {
-    this._send({
-      request_meta: { SessionID: this.sessionId },
+  _sendAudioBuffer(sess, buf) {
+    this._send(sess, {
+      request_meta: { SessionID: sess.sessionId },
       event: E.TaskRequest,
       source_audio: { binary_data: buf },
     });
@@ -252,16 +288,19 @@ export class VolcengineBackend {
     this.running = false;
     this.lines.finalizeAll();
     this.lines.dispose();
-    if (this.ws?.readyState === WebSocket.OPEN && this.started) {
-      this._send({ request_meta: { SessionID: this.sessionId }, event: E.FinishSession });
+    for (const sess of this.sessions) {
+      if (sess.ws?.readyState === WebSocket.OPEN && sess.started) {
+        this._send(sess, { request_meta: { SessionID: sess.sessionId }, event: E.FinishSession });
+      }
+      try { sess.ws?.close(); } catch {}
+      sess.ws = null;
     }
-    try { this.ws?.close(); } catch {}
-    this.ws = null;
+    this.sessions = [];
   }
 
   // ------------------------------------------------------------ 接收
 
-  _onMessage(data) {
+  _onMessage(sess, data) {
     let r;
     try {
       r = TranslateResponse.decode(data);
@@ -274,35 +313,49 @@ export class VolcengineBackend {
     const meta = r.response_meta || {};
 
     if (process.env.DEBUG_VOLC) {
-      console.log(`[volc] event=${r.event} data=${r.data?.length || 0}B text=${JSON.stringify(text.slice(0, 30))}`);
+      console.log(`[volc ${sess.plan.src}→${sess.plan.dst}] event=${r.event} data=${r.data?.length || 0}B text=${JSON.stringify(text.slice(0, 30))}`);
     }
 
     switch (r.event) {
       case E.SessionStarted:
-        this.started = true;
-        this.retries = 0;
-        this.emit({ t: 'ready', backend: 'volcengine', inputRate: INPUT_RATE, logId: this.logId });
-        for (const buf of this.pending.splice(0)) this._sendAudioBuffer(buf);
+        sess.started = true;
+        sess.retries = 0;
+        this.readyCount += 1;
+        if (this.readyCount >= this.sessions.length) {
+          this.emit({
+            t: 'ready',
+            backend: 'volcengine',
+            pair: this.pair.id,
+            inputRate: INPUT_RATE,
+            logId: sess.logId,
+          });
+          this.emit({ t: 'dir', dir: this.router.dir });
+        }
+        for (const buf of sess.pending.splice(0)) this._sendAudioBuffer(sess, buf);
         break;
 
       case E.SourceSubtitleStart:
-        this.lines.begin('src');
-        this.srcAccum = '';
+        sess.srcAccum = '';
+        if (this._isActive(sess)) this.lines.begin('src');
         break;
 
       case E.SourceSubtitleResponse:
       case E.SourceSubtitleEnd: {
         if (!text) break;
         const isEnd = r.event === E.SourceSubtitleEnd;
-
         // 651 是增量片段，652 是整句全量
-        this.srcAccum = isEnd ? text : mergeText(this.srcAccum, text);
+        sess.srcAccum = isEnd ? text : mergeText(sess.srcAccum, text);
 
         // 方向要按**整句累计文本**判，不能按单个片段判：
         // "这是我们 SensePedia 的产品经理" 里的 "SensePedia" 片段不含汉字，
-        // 单看它会把整句方向判成英文
-        if (this.router.observe(this.srcAccum)) this.emit({ t: 'dir', dir: this.router.dir });
+        // 单看它会把整句方向判成英文。
+        // 双会话时只信 routes 标记的那条（中日里是 ja→zh），它的原文有没有假名
+        // 就是"在说日语还是中文"的干净信号。
+        if (sess.plan.routes && this.router.observe(sess.srcAccum)) {
+          this.emit({ t: 'dir', dir: this.router.dir });
+        }
 
+        if (!this._isActive(sess)) break;
         const dir = this.router.mode === 'auto' ? this.router.dir : this.router.mode;
         this.lines.update('src', dir, text, isEnd);
         if (isEnd) this.lines.end('src', dir);
@@ -310,12 +363,12 @@ export class VolcengineBackend {
       }
 
       case E.TranslationSubtitleStart:
-        this.lines.begin('dst');
+        if (this._isActive(sess)) this.lines.begin('dst');
         break;
 
       case E.TranslationSubtitleResponse:
       case E.TranslationSubtitleEnd: {
-        if (!text) break;
+        if (!text || !this._isActive(sess)) break;
         // 方向不在这里重新判定：译文行沿用同序号原文行已经定下的方向，
         // 避免译文比原文慢半拍时串到下一句去
         const isEnd = r.event === E.TranslationSubtitleEnd;
@@ -327,7 +380,7 @@ export class VolcengineBackend {
       case E.TTSResponse:
       case E.TTSSentenceEnd: {
         const bytes = r.data;
-        if (!bytes || !bytes.length) break;
+        if (!bytes || !bytes.length || !this._isActive(sess)) break;
         const pcm = toPCM16Base64(bytes);
         this.router.notePlayback(pcmDurationMs(pcm, OUTPUT_RATE));
         this.emit({ t: 'audio', pcm });
@@ -337,7 +390,7 @@ export class VolcengineBackend {
       case E.UsageResponse: {
         const billing = meta.Billing || meta.billing;
         if (!billing) break;
-        // rpcmeta.proto 里 BillingItem 的字段是 PascalCase，这里统一成小写再往前端发
+        // rpcmeta.proto 里 BillingItem 的字段是 PascalCase，统一成小写再往前端发
         const items = (billing.Items || billing.items || []).map((i) => ({
           unit: i.Unit || i.unit || '',
           quantity: Number(i.Quantity ?? i.quantity ?? 0),
@@ -362,7 +415,7 @@ export class VolcengineBackend {
         this.emit({
           t: 'error',
           message: describeVolcCode(meta.StatusCode, meta.Message),
-          detail: `status=${meta.StatusCode} logid=${this.logId || '-'} ${meta.Message || ''}`,
+          detail: `${sess.plan.src}→${sess.plan.dst} status=${meta.StatusCode} logid=${sess.logId || '-'} ${meta.Message || ''}`,
           fatal: isFatalVolcCode(meta.StatusCode),
         });
         break;
@@ -375,9 +428,10 @@ export class VolcengineBackend {
 /**
  * 判断一段字节是不是 float32 PCM。
  *
- * float32 语音样本全部落在 [-1,1]；反过来，把 int16 语音当成 float32 解读时，
- * 指数位是随机的，绝大多数会变成 1e30 量级或非规格化的极小值，因此这个判据
- * 很干净。
+ * 文档说 pcm 在 24000Hz 采样率下默认 32 位浮点，显式传 bits 未必被采纳，
+ * 所以这里做一层自动识别：float32 语音样本全部落在 [-1,1]；反过来把 int16
+ * 语音当成 float32 解读时指数位是随机的，绝大多数会变成 1e30 量级或非规格化的
+ * 极小值，因此这个判据很干净。
  */
 function looksLikeFloat32(bytes) {
   if (bytes.length < 64 || bytes.length % 4 !== 0) return false;
@@ -464,17 +518,14 @@ export async function testVolcengine(auth, agent, timeoutMs = 12000) {
     );
 
     const backend = new VolcengineBackend({ ...auth, emit: () => {} });
+    const probe = { plan: { src: 'zhen', dst: 'zhen' }, sessionId: crypto.randomUUID(), ws: null };
     const ws = new WebSocket(ENDPOINT, { agent, headers: backend._headers() });
     ws.binaryType = 'nodebuffer';
+    probe.ws = ws;
     let logId = null;
 
     ws.on('upgrade', (res) => { logId = res.headers['x-tt-logid'] || null; });
-
-    ws.on('open', () => {
-      backend.ws = ws;
-      backend.sessionId = crypto.randomUUID();
-      backend._send(backend._startSessionMessage());
-    });
+    ws.on('open', () => backend._send(probe, backend._startSessionMessage(probe)));
 
     ws.on('message', (data) => {
       let r;

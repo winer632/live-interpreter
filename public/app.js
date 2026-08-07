@@ -13,9 +13,15 @@
 
 const OUTPUT_RATE = 24000;
 
+/** 中文固定在左栏，右栏随语言对变化 */
+const PAIRS = {
+  zhen: { right: 'English', fwd: 'zh2en', back: 'en2zh', fwdLabel: '中文 → English', backLabel: 'English → 中文' },
+  zhja: { right: '日本語', fwd: 'zh2ja', back: 'ja2zh', fwdLabel: '中文 → 日本語', backLabel: '日本語 → 中文' },
+};
+
 const state = {
   running: false,
-  mode: 'auto',
+  pair: 'zhen',
   backend: null,
   inputRate: 24000,
   echoGuard: 'aec',      // aec | duck | mute
@@ -29,7 +35,8 @@ const el = {
   status: $('#status'),
   startBtn: $('#startBtn'),
   backendBadge: $('#backendBadge'),
-  modeBtns: document.querySelectorAll('[data-mode]'),
+  pairBtns: document.querySelectorAll('[data-pair]'),
+  headRight: $('#headRight'),
   dirBadge: $('#dirBadge'),
   meterFill: $('#meterFill'),
   transcript: $('#transcript'),
@@ -121,7 +128,7 @@ function renderUsage() {
   const fmt = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n)));
 
   el.usageBadge.textContent = `已用 ${min < 1 ? `${(usage.ms / 1000).toFixed(0)}s` : `${min.toFixed(1)}min`}`
-    + (total ? ` · ${fmt(total)} tok` : '');
+    + (total ? ` · ${fmt(total)} token` : '');
   el.usageBadge.title =
     `本次会话累计消耗（火山接口不提供账户剩余额度）\n`
     + `音频时长 ${(usage.ms / 1000).toFixed(1)}s\n`
@@ -352,12 +359,13 @@ function renderLine(data) {
   }
 
   const { node } = entry;
-  node.className = `turn ${data.dir || ''}${data.final ? '' : ' live'}`;
-  node.querySelector('.arrow').textContent = data.dir === 'en2zh' ? '←' : '→';
+  const forward = String(data.dir || '').startsWith('zh2');   // 中译外
+  node.className = `turn ${forward ? 'zh2en' : 'en2zh'}${data.final ? '' : ' live'}`;
+  node.querySelector('.arrow').textContent = forward ? '→' : '←';
 
-  // src 是源语言，dst 是目标语言，按方向落到对应语言栏
-  const zh = data.dir === 'en2zh' ? data.dst : data.src;
-  const en = data.dir === 'en2zh' ? data.src : data.dst;
+  // src 是源语言、dst 是目标语言；中文固定落左栏
+  const zh = forward ? data.src : data.dst;
+  const en = forward ? data.dst : data.src;
   node.querySelector('.cell.zh .text').textContent = zh || '';
   node.querySelector('.cell.en .text').textContent = en || '';
 
@@ -371,8 +379,11 @@ function setDirection(dir) {
     el.dirBadge.className = 'dir-badge';
     return;
   }
-  el.dirBadge.textContent = dir === 'zh2en' ? '中文 → English' : 'English → 中文';
-  el.dirBadge.className = `dir-badge ${dir}`;
+  const p = PAIRS[state.pair];
+  const forward = dir === p.fwd;
+  el.dirBadge.textContent = forward ? p.fwdLabel : p.backLabel;
+  // 样式沿用中英那套：正向（中→外）用 zh2en，反向用 en2zh
+  el.dirBadge.className = `dir-badge ${forward ? 'zh2en' : 'en2zh'}`;
 }
 
 // ------------------------------------------------------------ 连接
@@ -385,7 +396,7 @@ function send(obj) {
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws = new WebSocket(`${proto}://${location.host}/ws?pair=${state.pair}`);
 
   ws.onmessage = async (e) => {
     let m;
@@ -408,7 +419,6 @@ function connect() {
           try {
             audio.player = new Player();
             await startCapture(m.inputRate);
-            send({ t: 'mode', mode: state.mode });
             setStatus(m.backend === 'mock' ? '演示模式运行中' : '已就绪 · 请开始说话', 'ok');
           } catch (err) {
             const msg = err?.name === 'NotAllowedError'
@@ -621,12 +631,22 @@ el.volumeInput.oninput = () => {
 
 el.startBtn.onclick = () => (state.running ? stop() : start());
 
-el.modeBtns.forEach((b) => {
+el.pairBtns.forEach((b) => {
   b.onclick = () => {
-    state.mode = b.dataset.mode;
-    el.modeBtns.forEach((x) => x.classList.toggle('active', x === b));
-    send({ t: 'mode', mode: state.mode });
-    if (state.mode !== 'auto') setDirection(state.mode);
+    const next = b.dataset.pair;
+    if (next === state.pair) return;
+    state.pair = next;
+    el.pairBtns.forEach((x) => x.classList.toggle('active', x === b));
+    el.headRight.textContent = PAIRS[next].right;
+    setDirection(null);
+    // 中日要开两条上游会话、中英只开一条，语言对是建连参数，必须重连
+    if (state.running) {
+      stop();
+      setTimeout(start, 200);
+      toast(`已切换到${next === 'zhja' ? '中日' : '中英'}，正在重连…`);
+    } else {
+      toast(`已切换到${next === 'zhja' ? '中日' : '中英'}`);
+    }
   };
 });
 

@@ -244,12 +244,14 @@ const server = http.createServer(async (req, res) => {
 const wss = new WebSocketServer({ noServer: true });
 
 server.on('upgrade', (req, socket, head) => {
-  const { pathname } = new URL(req.url, 'http://localhost');
+  const { pathname, searchParams } = new URL(req.url, 'http://localhost');
   if (pathname !== '/ws') { socket.destroy(); return; }
-  wss.handleUpgrade(req, socket, head, (client) => session(client));
+  // 语言对在建连时定死：中日要开两条上游会话，中英只开一条，切换必须重连
+  const pair = searchParams.get('pair') === 'zhja' ? 'zhja' : 'zhen';
+  wss.handleUpgrade(req, socket, head, (client) => session(client, pair));
 });
 
-async function session(client) {
+async function session(client, pair = 'zhen') {
   const cfg = readConfig();
   const emit = (msg) => {
     if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(msg));
@@ -266,11 +268,16 @@ async function session(client) {
         client.close();
         return;
       }
-      backend = new VolcengineBackend({ ...cfg.volcengine, options: cfg.options, emit });
+      backend = new VolcengineBackend({ ...cfg.volcengine, pair, options: cfg.options, emit });
       backend.start(await agentFor('volcengine'));
     } else {
       if (!cfg.openai.apiKey) {
         emit({ t: 'error', message: '尚未配置 OpenAI API Key', fatal: true });
+        client.close();
+        return;
+      }
+      if (pair === 'zhja') {
+        emit({ t: 'error', message: 'OpenAI 后端暂只支持中英互译，中日请切换到火山后端', fatal: true });
         client.close();
         return;
       }
@@ -283,7 +290,7 @@ async function session(client) {
     return;
   }
 
-  console.log(`[ws] 会话开始 · 后端 ${MOCK ? 'mock' : cfg.backend}`);
+  console.log(`[ws] 会话开始 · 后端 ${MOCK ? 'mock' : cfg.backend} · 语言对 ${pair}`);
 
   client.on('message', (raw) => {
     let msg;

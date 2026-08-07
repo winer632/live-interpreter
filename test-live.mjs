@@ -16,11 +16,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const LANG = process.argv[2] === 'en' ? 'en' : 'zh';
+const LANG = ['en', 'ja'].includes(process.argv[2]) ? process.argv[2] : 'zh';
 const CASES = {
   zh: { voice: 'Tingting', text: '王先生您好，非常感谢您今天专程过来。我们先介绍一下公司的基本情况，然后再谈合作细节。' },
   en: { voice: 'Samantha', text: 'Thank you for having me. Could you walk me through the pricing model and the enterprise deployment options first?' },
+  ja: { voice: 'Kyoko', text: 'こんにちは、お会いできて嬉しいです。協力の詳細についてお話ししましょう。' },
 };
+// 日语必然走中日语言对；中文两种语言对都能测，用 PAIR 环境变量指定
+const PAIR = process.env.PAIR || (LANG === 'ja' ? 'zhja' : 'zhen');
 const voice = CASES[LANG].voice;
 // 允许覆盖文本：node test-live.mjs zh "这是我们 SensePedia 的产品经理"
 const text = process.argv[3] || CASES[LANG].text;
@@ -57,7 +60,7 @@ let ready = null;
 let firstAudioAt = null;
 const t0 = Date.now();
 
-const ws = new WebSocket('ws://localhost:5173/ws');
+const ws = new WebSocket(`ws://localhost:5173/ws?pair=${PAIR}`);
 
 ws.on('error', (e) => {
   console.error('连接失败：', e.message, '\n请先在另一个终端运行 npm start');
@@ -71,7 +74,7 @@ ws.on('message', (raw) => {
   switch (m.t) {
     case 'ready':
       ready = m;
-      console.log(`✅ 上游就绪 · 后端 ${m.backend} · 输入 ${m.inputRate}Hz\n`);
+      console.log(`✅ 上游就绪 · 后端 ${m.backend} · 语言对 ${m.pair || PAIR} · 输入 ${m.inputRate}Hz\n`);
       stream();
       break;
     case 'dir':

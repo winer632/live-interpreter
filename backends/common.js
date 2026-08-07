@@ -13,21 +13,32 @@
  *   { t: 'closed', reason }
  */
 
-const CJK = /[㐀-䶿一-鿿豈-﫿぀-ヿ]/;
+const KANA = /[\u3040-\u30ff]/;               // 平假名 + 片假名，日语的判别特征
+const HAN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;  // 汉字
 const LATIN = /[A-Za-z]/;
 
 /**
- * 中日文字 → zh；拉丁字母 → en；纯标点数字 → null（信息不足，不改方向）
+ * 假名 → ja；汉字 → zh；拉丁字母 → en；纯标点数字 → null（信息不足，不改方向）
  *
- * 只要出现汉字就判中文，不看比例：英文母语者的转写结果里不会冒出汉字，
- * 而中文里夹英文术语（"这是我们 SensePedia 的产品经理"）是常态。
- * 反过来按比例算的话，这种句子很容易被判成英文。
+ * 判别顺序有讲究：
+ *   · 假名优先。日语句子几乎必然含假名，中文永远不含，这是最干净的区分点；
+ *     反过来只看汉字的话，日语里的汉字会被误判成中文。
+ *   · 汉字优先于拉丁字母。中文里夹英文术语（"这是我们 SensePedia 的产品经理"）
+ *     是常态，按字符比例算很容易把这种句子判成英文；而英文母语者的转写结果里
+ *     不会冒出汉字，所以"有汉字即中文"是安全的。
  */
 export function detectLang(text) {
-  if (CJK.test(text)) return 'zh';
+  if (KANA.test(text)) return 'ja';
+  if (HAN.test(text)) return 'zh';
   if (LATIN.test(text)) return 'en';
   return null;
 }
+
+/** 支持的语言对。中文固定在左栏，另一种语言在右栏。 */
+export const PAIRS = {
+  zhen: { id: 'zhen', a: 'zh', b: 'en', label: '中英', right: 'English' },
+  zhja: { id: 'zhja', a: 'zh', b: 'ja', label: '中日', right: '日本語' },
+};
 
 /** 译音播完之后继续冻结方向的时间，用来吃掉扬声器的尾音 */
 export const FREEZE_TAIL_MS = 350;
@@ -41,12 +52,18 @@ export const FREEZE_TAIL_MS = 350;
  * 反向翻译→扬声器"这个循环无法启动。
  */
 export class DirectionRouter {
-  constructor() {
-    this.dir = null;        // zh2en | en2zh
-    this.mode = 'auto';     // auto | zh2en | en2zh
+  /** @param {object} pair PAIRS 里的语言对，决定方向标识长什么样 */
+  constructor(pair = PAIRS.zhen) {
+    this.pair = pair;
+    this.dir = null;        // 形如 zh2en / en2zh / zh2ja / ja2zh
+    this.mode = 'auto';
     this.playUntil = 0;
     this.lastPlaying = 0;
   }
+
+  /** 该语言对的两个方向 */
+  get forward() { return `${this.pair.a}2${this.pair.b}`; }
+  get backward() { return `${this.pair.b}2${this.pair.a}`; }
 
   setMode(mode) {
     this.mode = mode;
@@ -80,8 +97,9 @@ export class DirectionRouter {
   observe(text) {
     if (this.mode !== 'auto') return false;
     const lang = detectLang(text);
-    if (!lang) return false;
-    const want = lang === 'zh' ? 'zh2en' : 'en2zh';
+    // 只认本语言对里的两种语种，别的语种一律不改方向
+    if (lang !== this.pair.a && lang !== this.pair.b) return false;
+    const want = lang === this.pair.a ? this.forward : this.backward;
     if (want === this.dir) return false;
     if (this.frozen()) return false;
     this.dir = want;

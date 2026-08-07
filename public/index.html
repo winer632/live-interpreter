@@ -28,8 +28,9 @@
   </div>
 
   <div class="tools">
-    <div class="modes" role="group" aria-label="翻译方向">
-      <button data-mode="auto" class="active" title="自动识别说话人语种，中英双向互译">中英自动</button>
+    <div class="modes" role="group" aria-label="语言对">
+      <button data-pair="zhen" class="active" title="中文 ⇄ English，自动识别说话人语种">中英自动</button>
+      <button data-pair="zhja" title="中文 ⇄ 日本語，自动识别说话人语种。需开两条上游会话，费用约为中英的两倍">中日自动</button>
     </div>
     <button id="muteBtn" class="ghost" title="点击静音，或按住空格键临时静音">🎤 麦克风</button>
     <button id="clearBtn" class="ghost" title="清空字幕">清空</button>
@@ -46,16 +47,16 @@
   <div class="col-head">
     <div class="head zh">中文</div>
     <div class="head-spacer"></div>
-    <div class="head en">English</div>
+    <div id="headRight" class="head en">English</div>
   </div>
 
   <div id="transcript" class="transcript">
     <div id="emptyHint" class="empty">
       <p class="big">点击「开始传译」，然后正常说话即可</p>
       <ul>
-        <li>说中文 → 右侧出现英文字幕，扬声器播放英文语音</li>
-        <li>对方说英文 → 左侧出现中文字幕，扬声器播放中文语音</li>
-        <li>方向全自动识别，中文里夹英文术语也不会判错</li>
+        <li>说中文 → 右侧出现译文字幕，扬声器播放译文语音</li>
+        <li>对方说英文/日语 → 左侧出现中文字幕，扬声器播放中文语音</li>
+        <li>右上角切换<strong>中英</strong>或<strong>中日</strong>，方向全自动识别，中文里夹英文术语也不会判错</li>
         <li>按 <kbd>空格</kbd> 可临时静音麦克风，按 <kbd>⛶</kbd> 全屏展示给客户</li>
       </ul>
     </div>
@@ -141,8 +142,9 @@
     </select>
     <p class="note">
       同一房间外放时，扬声器的译音会被麦克风重新拾取。
-      <strong>OpenAI 后端</strong>有"播放期间冻结方向"这层保护，用「仅回声消除」即可；
-      <strong>火山</strong>是单会话双向，没有这层保护，默认用「压低麦克风」。
+      双会话的组合（<strong>OpenAI</strong>、<strong>火山中日</strong>）有"播放期间冻结方向"
+      这层保护，回环起不来，用「仅回声消除」即可；
+      <strong>火山中英</strong>是 <code>zhen</code> 单会话双向，没有这层保护，默认用「压低麦克风」。
       若仍有循环，先降低扬声器音量，再逐级加强。
     </p>
   </section>
