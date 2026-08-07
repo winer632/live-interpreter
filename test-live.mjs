@@ -16,12 +16,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const LANG = ['en', 'ja', 'yue', 'de', 'fr', 'es', 'pt', 'ko', 'th'].includes(process.argv[2]) ? process.argv[2] : 'zh';
+const LANG = ['en', 'ja', 'yue', 'sh', 'de', 'fr', 'es', 'pt', 'ko', 'th'].includes(process.argv[2]) ? process.argv[2] : 'zh';
 const CASES = {
   zh: { voice: 'Tingting', text: '王先生您好，非常感谢您今天专程过来。我们先介绍一下公司的基本情况，然后再谈合作细节。' },
   en: { voice: 'Samantha', text: 'Thank you for having me. Could you walk me through the pricing model and the enterprise deployment options first?' },
   ja: { voice: 'Kyoko', text: 'こんにちは、お会いできて嬉しいです。協力の詳細についてお話ししましょう。' },
   yue: { voice: 'Sinji', text: '你好，好高興見到你。我哋今日嚟傾下合作嘅細節啦。' },
+  // 没有上海话音色，用普通话音色念沪语文本，够验证链路
+  sh: { voice: 'Tingting', text: '侬好，今朝天气蛮好额。阿拉来谈谈合作个细节。' },
   de: { voice: 'Anna', text: 'Guten Tag, schön Sie kennenzulernen. Sprechen wir über die Details der Zusammenarbeit.' },
   fr: { voice: 'Thomas', text: 'Bonjour, ravi de vous rencontrer. Parlons des details de la cooperation.' },
   es: { voice: 'Paulina', text: 'Hola, encantado de conocerle. Hablemos de los detalles de la cooperación.' },
@@ -31,7 +33,7 @@ const CASES = {
 };
 // 外语决定语言对；中文可以配任何一对，用 PAIR 环境变量指定
 const PAIR = process.env.PAIR
-  || ({ ja: 'zhja', de: 'zhde', fr: 'zhfr', es: 'zhes', pt: 'zhpt', ko: 'zhko', th: 'zhth', yue: 'yuezh' }[LANG] || 'zhen');
+  || ({ ja: 'zhja', de: 'zhde', fr: 'zhfr', es: 'zhes', pt: 'zhpt', ko: 'zhko', th: 'zhth', yue: 'yuezh', sh: 'shzh' }[LANG] || 'zhen');
 const voice = CASES[LANG].voice;
 // 允许覆盖文本：node test-live.mjs zh "这是我们 SensePedia 的产品经理"
 const text = process.argv[3] || CASES[LANG].text;
@@ -149,7 +151,7 @@ function finish(code) {
   check(got.length > 0, `产出字幕 ${got.length} 句`);
   check(got.some((l) => l.src?.trim()), '有原文');
   check(got.some((l) => l.dst?.trim()), '有译文');
-  if (['yuezh', 'zhko', 'zhth'].includes(PAIR)) console.log(`ℹ️  该语言对走 s2t，只有字幕无译音（收到 ${outAudio.length} 包）`);
+  if (['yuezh', 'shzh', 'zhko', 'zhth'].includes(PAIR)) console.log(`ℹ️  该语言对走 s2t，只有字幕无译音（收到 ${outAudio.length} 包）`);
   else check(outAudio.length > 0, `收到译音 ${outAudio.length} 包`);
 
   if (outAudio.length) {

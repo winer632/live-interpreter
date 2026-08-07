@@ -83,11 +83,12 @@ function planSessions(pair) {
     return [{ src: 'zhen', dst: 'zhen', dir: null, routes: true, mode: 's2s' }];
   }
 
-  if (pair.id === 'yuezh') {
-    // 单向、且只能出字幕：实测 s2s 的 volc_tob-yue-CN2zh-s2s 模型不存在，
-    // 只有 s2t 可用；反向 zh→yue-CN 两种模式都不存在，做不了。
-    // 方向固定，不需要判别（普通话和粤语都是汉字，本来也判不了）。
-    return [{ src: 'yue-CN', dst: 'zh', dir: 'yue2zh', routes: false, mode: 's2t' }];
+  // 方言（粤语、上海话）：单向、且只能出字幕。实测 s2s 的
+  // volc_tob-yue-CN2zh-s2s / volc_tob-sh-CN2zh-s2s 都不存在，只有 s2t 可用；
+  // 反向 zh→方言 两种模式也都不存在。方向固定，不需要判别 ——
+  // 方言和普通话都是汉字，本来也判不了。
+  if (pair.oneWay) {
+    return [{ src: pair.srcCode, dst: 'zh', dir: `${pair.a}2${pair.b}`, routes: false, mode: 's2t' }];
   }
 
   // 其余都是"中文 ⇄ X"：没有对应的反转值，只能开两条会话，同一路音频喂给两条，

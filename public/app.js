@@ -29,7 +29,9 @@ const PAIRS = {
   // 韩泰不在火山 s2s 的 8 语种里，只能走 s2t，因此没有译音
   zhko: { a: 'zh', b: 'ko', left: '中文', right: '한국어', name: '中韩', noAudio: true },
   zhth: { a: 'zh', b: 'th', left: '中文', right: 'ไทย', name: '中泰', noAudio: true },
+  // 两个方言都只有「方言 → 普通话」这一个方向，且只有字幕
   yuezh: { a: 'yue', b: 'zh', left: '粤语', right: '普通话', name: '粤→普', oneWay: true, noAudio: true },
+  shzh: { a: 'sh', b: 'zh', left: '上海话', right: '普通话', name: '沪→普', oneWay: true, noAudio: true },
 };
 const dirLabel = (p, forward) =>
   forward ? `${p.left} → ${p.right}` : `${p.right} → ${p.left}`;
@@ -66,6 +68,9 @@ const el = {
   emptyHint: $('#emptyHint'),
   settingsBtn: $('#settingsBtn'),
   settings: $('#settings'),
+  hintForeign: $('#hintForeign'),
+  hintPairs: $('#hintPairs'),
+  hintSilent: $('#hintSilent'),
   backendSelect: $('#backendSelect'),
   volcKey: $('#volcKey'),
   volcStatus: $('#volcStatus'),
@@ -860,10 +865,30 @@ el.filesBtn.onclick = () => { el.files.showModal(); renderFileList(); };
 el.closeFiles.onclick = () => el.files.close();
 el.backToList.onclick = () => renderFileList();
 
+// ------------------------------------------------------------ 空状态提示
+
+/**
+ * 空状态里的语种清单直接由 PAIRS 生成。
+ * 原先是写死的文案，每加一个语种都得手改一次，已经漏过两回
+ * （加了德法西葡之后还写着"对方说英文/日语"）。
+ */
+function renderHints() {
+  const all = Object.values(PAIRS);
+  const foreign = all.filter((p) => !p.oneWay).map((p) => p.right);
+  const silent = all.filter((p) => p.noAudio).map((p) => p.name);
+
+  el.hintForeign.textContent =
+    `对方说 ${foreign.join(' / ')} → 左侧出现中文字幕，扬声器播放中文语音`;
+  el.hintPairs.textContent = `右上角下拉切换语言对：${all.map((p) => p.name).join(' / ')}`;
+  el.hintSilent.textContent =
+    `方向全自动识别，中文里夹外文术语也不会判错。${silent.join('、')}只有字幕没有译音`;
+}
+
 // ------------------------------------------------------------ 初始化
 
 (async function init() {
   setStatus('未连接', '');
+  renderHints();
   el.volumeLabel.textContent = `${el.volumeInput.value}%`;
   state.volume = Number(el.volumeInput.value) / 100;
 

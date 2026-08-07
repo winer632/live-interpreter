@@ -31,7 +31,7 @@ const SCRIPTS = [
 
 /** 每种语言用什么文字系统写 */
 const LANG_SCRIPT = {
-  zh: 'han', yue: 'han',
+  zh: 'han', yue: 'han', sh: 'han',
   ja: 'kana', ko: 'hangul', th: 'thai',
   en: 'latin', de: 'latin', fr: 'latin', es: 'latin', pt: 'latin',
 };
@@ -78,9 +78,15 @@ export const PAIRS = {
   // 韩泰不在 s2s 的 8 语种里，实测 zh2ko-s2s / zh2th-s2s 模型不存在，只能走 s2t
   zhko: { id: 'zhko', a: 'zh', b: 'ko', label: '中韩', left: '中文', right: '한국어', noAudio: true },
   zhth: { id: 'zhth', a: 'zh', b: 'th', label: '中泰', left: '中文', right: 'ไทย', noAudio: true },
+  // 两个方言都只有 s2t 的「方言→普通话」可用：实测 s2s 模型不存在，反向也不存在。
+  // srcCode 是上游要的语种代号，与用于方向标识的短名不同。
   yuezh: {
     id: 'yuezh', a: 'yue', b: 'zh', label: '粤普', left: '粤语', right: '普通话',
-    oneWay: true, noAudio: true,
+    srcCode: 'yue-CN', oneWay: true, noAudio: true,
+  },
+  shzh: {
+    id: 'shzh', a: 'sh', b: 'zh', label: '沪普', left: '上海话', right: '普通话',
+    srcCode: 'sh-CN', oneWay: true, noAudio: true,
   },
 };
 
