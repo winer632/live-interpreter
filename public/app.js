@@ -103,6 +103,7 @@ const el = {
   backToList: $('#backToList'),
   usageBadge: $('#usageBadge'),
   lagBadge: $('#lagBadge'),
+  healthBadge: $('#healthBadge'),
   termList: $('#termList'),
   termCount: $('#termCount'),
   termStatus: $('#termStatus'),
@@ -295,7 +296,13 @@ class Player {
 
 // ------------------------------------------------------------ 音频采集
 
-const audio = { ctx: null, stream: null, worklet: null, player: null, guardTimer: null };
+const audio = {
+  ctx: null, stream: null, worklet: null, player: null, guardTimer: null,
+  track: null,
+  lastVoiceAt: 0,   // 最近一次麦克风上有像样信号的时刻
+  lastLineAt: 0,    // 最近一次收到字幕的时刻
+  health: '',       // 当前健康状态，变化时才打日志
+};
 
 async function startCapture(inputRate) {
   audio.stream = await navigator.mediaDevices.getUserMedia({
@@ -306,6 +313,7 @@ async function startCapture(inputRate) {
       channelCount: 1,
     },
   });
+  watchMicTrack(audio.stream.getAudioTracks()[0]);
 
   audio.ctx = new AudioContext({ sampleRate: inputRate, latencyHint: 'interactive' });
   await audio.ctx.resume();
@@ -324,11 +332,92 @@ async function startCapture(inputRate) {
 
   audio.worklet.port.onmessage = (e) => {
     const { pcm, peak } = e.data;
+    // 闸门压低后人声大约还有 0.02 上下，底噪远低于此，用它区分"有人说话"和"死寂"
+    if (peak > 0.01) audio.lastVoiceAt = Date.now();
     drawMeter(peak);
     send({ t: 'audio', pcm: float32ToPCM16Base64(pcm) });
   };
 
   startEchoGuard();
+}
+
+/**
+ * 麦克风健康监测。
+ *
+ * 排查「开译音后翻译走不过十句就停」时发现：这一层原先是完全没有的 ——
+ * track 被系统静音（macOS 上蓝牙耳机因为要开麦而从 A2DP 切到 HFP 时就会发生）、
+ * 或者设备被换掉，页面毫无察觉：WebSocket 照连、音频包照发，只是发的全是静音，
+ * 界面上状态还停在「已就绪」。失败是静默的，人只能看到"翻译不动了"。
+ *
+ * 这里不做恢复，只负责把这类静默失败变成看得见、可上报的状态。
+ */
+function watchMicTrack(track) {
+  audio.track = track || null;
+  if (!track) return;
+  const note = (why) => {
+    console.warn(`[interpreter] 麦克风${why}`, micSnapshot());
+    toast(`麦克风${why}。若字幕停住，多半是这里断的 —— 换回内置麦克风或有线设备再试。`, 'err');
+  };
+  track.addEventListener('mute', () => note('被系统静音'));
+  track.addEventListener('ended', () => note('轨道已结束'));
+  track.addEventListener('unmute', () => console.warn('[interpreter] 麦克风恢复', micSnapshot()));
+  navigator.mediaDevices?.addEventListener?.('devicechange', () => {
+    if (state.running) console.warn('[interpreter] 音频设备发生变化', micSnapshot());
+  });
+}
+
+/** 出问题时可以直接复制给别人看的一份现场快照 */
+function micSnapshot() {
+  const t = audio.track;
+  return {
+    at: new Date().toISOString(),
+    track: t ? { label: t.label, muted: t.muted, enabled: t.enabled, state: t.readyState } : null,
+    micCtx: audio.ctx?.state || null,
+    spkCtx: audio.player?.ctx.state || null,
+    backlog: audio.player ? +audio.player.backlog.toFixed(2) : null,
+    speak: state.speak,
+    guard: state.echoGuard,
+    ws: ws?.readyState ?? -1,
+    静音秒数: audio.lastVoiceAt ? +((Date.now() - audio.lastVoiceAt) / 1000).toFixed(1) : null,
+    无字幕秒数: audio.lastLineAt ? +((Date.now() - audio.lastLineAt) / 1000).toFixed(1) : null,
+  };
+}
+
+/**
+ * 两条看门狗，用来把「翻译不动了」拆成两种可区分的原因：
+ *   · 麦克风一直没信号 → 采集/设备侧断了（换设备、被系统静音）
+ *   · 有信号但久不出字幕 → 上游侧的问题
+ * 只报告、不自愈：自动重连会把现场冲掉，反而更难查。
+ */
+const NO_VOICE_MS = 15000;
+const NO_LINE_MS = 25000;
+
+function updateHealth() {
+  if (!state.running || !audio.ctx) { el.healthBadge.hidden = true; audio.health = ''; return; }
+
+  const now = Date.now();
+  const quiet = audio.lastVoiceAt ? now - audio.lastVoiceAt : now - (audio.lastLineAt || now);
+  const silentLines = audio.lastLineAt ? now - audio.lastLineAt : 0;
+
+  let kind = '', text = '';
+  if (audio.track?.muted || audio.track?.readyState === 'ended') {
+    kind = 'mic-dead';
+    text = '麦克风已被系统断开';
+  } else if (quiet > NO_VOICE_MS) {
+    kind = 'no-voice';
+    text = `麦克风 ${Math.round(quiet / 1000)}s 无信号`;
+  } else if (silentLines > NO_LINE_MS) {
+    kind = 'no-line';
+    text = `有声音但 ${Math.round(silentLines / 1000)}s 无字幕`;
+  }
+
+  if (kind !== audio.health) {
+    audio.health = kind;
+    if (kind) console.warn(`[interpreter] ${text}`, micSnapshot());
+  }
+  el.healthBadge.textContent = text;
+  el.healthBadge.className = `pill ${kind === 'mic-dead' ? 'warn' : ''}`;
+  el.healthBadge.hidden = !kind;
 }
 
 async function stopCapture() {
@@ -338,7 +427,10 @@ async function stopCapture() {
   audio.stream?.getTracks().forEach((t) => t.stop());
   try { await audio.ctx?.close(); } catch {}
   await audio.player?.close();
-  audio.ctx = audio.stream = audio.worklet = audio.player = null;
+  audio.ctx = audio.stream = audio.worklet = audio.player = audio.track = null;
+  audio.lastVoiceAt = audio.lastLineAt = 0;
+  audio.health = '';
+  el.healthBadge.hidden = true;
   drawMeter(0);
 }
 
@@ -359,8 +451,9 @@ function startEchoGuard() {
       audio.worklet.port.postMessage({ gain: g });
     }
 
-    // 每 500ms 刷新一次译音积压，落后太多时给出可见提示
+    // 每 500ms 刷新一次译音积压与采集健康，落后太多时给出可见提示
     if (++tick % 10 === 0 && audio.player) {
+      updateHealth();
       const lag = state.speak ? audio.player.backlog : 0;
       if (lag > 1) {
         el.lagBadge.textContent = `译音滞后 ${lag.toFixed(1)}s`;
@@ -463,6 +556,9 @@ function connect() {
     switch (m.t) {
       case 'ready': {
         state.epoch += 1;
+        // 上游断线重开也会再发一次 ready，两条看门狗跟着重新计时，避免误报
+        audio.lastVoiceAt = audio.lastLineAt = Date.now();
+        audio.health = '';
         state.backend = m.backend;
         state.inputRate = m.inputRate;
         // 服务端告诉我们这条会话到底有没有译音（以 s2t 起的就没有）
@@ -497,6 +593,7 @@ function connect() {
         break;
 
       case 'line':
+        audio.lastLineAt = Date.now();
         renderLine(m);
         break;
 
