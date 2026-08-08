@@ -179,12 +179,28 @@ export function mergeText(prev, next) {
 }
 
 /**
+ * 原文已经定稿、译文还没到的行，比普通空闲多等这么久再归档。
+ *
+ * 火山的事件流是严格串行的：650→652（原文）之后才是 653→655（译文）。
+ * 开译音时上游要先把译文合成成语音再吐字幕，这两段之间实测能拉开十几秒。
+ */
+export const PENDING_DST_MS = 20000;
+
+/**
  * 把零散的字幕片段攒成一行行"原文 + 译文"。
  *
- * 火山有明确的句首/句尾事件（650/652 原文，653/655 译文），原文和译文各自计数，
- * 第 N 句原文自然对上第 N 句译文 —— 即使译文比原文慢半拍也不会串行。
+ * 火山有明确的句首/句尾事件（650/652 原文，653/655 译文）；OpenAI 没有句子边界，
+ * 退化成"方向变化或静默超时即断句"，靠 update 直接开行。
  *
- * OpenAI 没有句子边界，退化成"方向变化或静默超时即断句"。
+ * 配对规则是这个类的全部难点，历史上错过两次，现在的写法建立在两条不变式上：
+ *
+ *   1. **行号只增不复用。** 原文和译文共用同一个计数器，谁开行谁取号。
+ *      早先原文、译文各记各的号，一旦某行被提前归档，两个号就错开一格，
+ *      后面每一行都变成「本句原文 ＋ 上一句译文」，而且再也回不来。
+ *      号不复用，迟到的译文最多自己占一个兜底行，错位不会往下传。
+ *
+ *   2. **译文按先进先出认领等待中的原文行。** 不看内容、不猜位置，
+ *      于是译文比原文慢多少都不会串到下一句去。
  */
 export class LineBuilder {
   /**
@@ -193,24 +209,50 @@ export class LineBuilder {
    *   必须在这一层做而不是在增量片段上做：术语可能被切在两个片段之间，
    *   逐片段替换会漏掉。
    */
-  constructor(emit, { idleMs = 5000, transform = null } = {}) {
+  constructor(emit, { idleMs = 5000, pendingMs = PENDING_DST_MS, transform = null } = {}) {
     this.emit = emit;
     this.idleMs = idleMs;
+    this.pendingMs = pendingMs;
     this.transform = transform;
     this.lines = new Map();
-    this.finished = new Set();
-    this.seq = { src: 0, dst: 0 };
+    this.nextId = 0;                    // 行号唯一来源，取过不回收
+    this.awaiting = [];                 // 已出原文、还在等译文的行号，先进先出
+    this.cur = { src: null, dst: null };  // 两路各自正在写入的行号
     this.timer = null;
   }
 
+  _open(dir) {
+    const id = ++this.nextId;
+    const line = { id, dir: dir || null, src: '', dst: '', srcDone: false, dstDone: false, srcEndAt: 0 };
+    this.lines.set(id, line);
+    return line;
+  }
+
+  /** 译文认领：接最早那条还在等译文的原文行；等不到就自己开一行兜底 */
+  _claimForDst() {
+    while (this.awaiting.length) {
+      const line = this.lines.get(this.awaiting.shift());
+      if (line && !line.dstDone) return line;
+    }
+    return this._open();
+  }
+
+  /**
+   * 取当前正在写的行。
+   *
+   * cur 为空表示这一路还没开过行（OpenAI 那条路没有句首事件），现开一个；
+   * cur 有值但行已经不在了，说明那一句已经归档，迟到的增量包直接丢弃 ——
+   * 否则会凭空多出半截残行。
+   */
   _line(which, dir) {
-    const id = this.seq[which];
-    // 这一句已经归档了，迟到的增量包直接丢弃，否则会把成品行冲成空行
-    if (this.finished.has(id)) return null;
-    let line = this.lines.get(id);
-    if (!line) {
-      line = { id, dir, src: '', dst: '', srcDone: false, dstDone: false };
-      this.lines.set(id, line);
+    let line;
+    if (this.cur[which] === null) {
+      line = which === 'dst' ? this._claimForDst() : this._open(dir);
+      this.cur[which] = line.id;
+      if (which === 'src') this.awaiting.push(line.id);
+    } else {
+      line = this.lines.get(this.cur[which]);
+      if (!line) return null;
     }
     if (dir) line.dir = dir;
     return line;
@@ -227,43 +269,49 @@ export class LineBuilder {
       dst: fix ? fix(line.dst) : line.dst,
       final,
     });
-    if (final) {
-      this.lines.delete(line.id);
-      this.finished.add(line.id);
-      // 只需记住最近若干句，避免无限增长
-      if (this.finished.size > 200) {
-        const oldest = Math.min(...this.finished);
-        this.finished.delete(oldest);
-      }
-    }
+    if (final) this.lines.delete(line.id);
   }
 
   _touch() {
     clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.finalizeAll(), this.idleMs);
+    this.timer = setTimeout(() => this._sweep(), this.idleMs);
   }
 
   /**
-   * 显式句首（火山 650 原文 / 653 译文）。
+   * 空闲到点，把没收尾的行归档。
    *
-   * 原文和译文原先各记各的号，靠"第 N 句原文对第 N 句译文"配对。但译文比原文
-   * 晚 2 秒以上到，中间一旦穿插了超时归档，两个号就会错开一格 —— 表现为
-   * 上一行只有原文没译文、下一行只有译文没原文。
-   *
-   * 改成按顺序认领：译文开始时，挂到最早那条"有原文、还没译文"的行上。
-   * 这样与时序无关，模型把一句原文拆成两句译文也不会串。
+   * 关键在于**还在等译文的行要多等**：早先这里是一刀切的 finalizeAll，
+   * 只要译文比原文晚 5 秒就会被提前收成"有原文没译文"，
+   * 而且从那一刻起后面每行都错位一格。这正是开译音时字幕会整体串行的原因。
    */
-  begin(which, dir) {
-    if (which === 'dst') {
-      for (const [id, line] of this.lines) {
-        if (line.src && !line.dst && !line.dstDone) {
-          this.seq.dst = id;
-          this._line('dst', dir);
-          return;
-        }
+  _sweep() {
+    const now = Date.now();
+    let pending = false;
+
+    for (const line of [...this.lines.values()]) {
+      if (line.srcDone && !line.dstDone && now - line.srcEndAt < this.pendingMs) {
+        pending = true;
+        continue;
+      }
+      if (line.src || line.dst) {
+        line.srcDone = line.dstDone = true;
+        this._flush(line);
+      } else {
+        this.lines.delete(line.id);
       }
     }
-    this.seq[which] += 1;
+
+    this.awaiting = this.awaiting.filter((id) => this.lines.has(id));
+    for (const which of ['src', 'dst']) {
+      if (!this.lines.has(this.cur[which])) this.cur[which] = null;
+    }
+    // 还有行在等译文，过一会儿再回来看
+    this.timer = pending ? setTimeout(() => this._sweep(), 1000) : null;
+  }
+
+  /** 显式句首（火山 650 原文 / 653 译文） */
+  begin(which, dir) {
+    this.cur[which] = null;   // 上一句到此为止，下面按 which 各自开新行或认领
     this._line(which, dir);
   }
 
@@ -271,7 +319,12 @@ export class LineBuilder {
   end(which, dir) {
     const line = this._line(which, dir);
     if (!line) return;
-    line[which === 'src' ? 'srcDone' : 'dstDone'] = true;
+    if (which === 'src') {
+      line.srcDone = true;
+      line.srcEndAt = Date.now();
+    } else {
+      line.dstDone = true;
+    }
     this._flush(line);
   }
 
@@ -290,12 +343,12 @@ export class LineBuilder {
   /** 无显式边界时（OpenAI）：方向一变就换行 */
   advanceOnDirectionChange() {
     this.finalizeAll();
-    this.seq.src += 1;
-    this.seq.dst = this.seq.src;
   }
 
+  /** 会话结束/关闭时的硬收尾：不留悬空行，也不再等译文 */
   finalizeAll() {
     clearTimeout(this.timer);
+    this.timer = null;
     for (const line of this.lines.values()) {
       if (line.src || line.dst) {
         line.srcDone = line.dstDone = true;
@@ -303,13 +356,16 @@ export class LineBuilder {
       }
     }
     this.lines.clear();
-    const n = Math.max(this.seq.src, this.seq.dst) + 1;
-    this.seq.src = this.seq.dst = n;
+    this.awaiting.length = 0;
+    this.cur.src = this.cur.dst = null;
   }
 
   dispose() {
     clearTimeout(this.timer);
+    this.timer = null;
     this.lines.clear();
+    this.awaiting.length = 0;
+    this.cur.src = this.cur.dst = null;
   }
 }
 
